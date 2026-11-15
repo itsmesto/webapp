@@ -1,0 +1,19 @@
+itsme invoicey 3.1.5 installation
+
+1. On Android 11 or newer, allow installation from the source you used to receive this file.
+2. If you are moving from an older differently-signed build, export a workspace backup and uninstall it first. Then install itsme-invoicey-v3.1.5-safe-actions-service-catalog.apk. This artifact uses a fresh corrective signing key, so older differently-signed builds must be uninstalled after exporting a backup.
+3. Open itsme invoicey and complete the first-time setup wizard.
+4. Create the company administrator and software administrator accounts, then keep the recovery codes safe.
+5. To erase every company, user, transaction and generated local Excel backup, use Factory reset from the sign-in screen and enter the private reset code.
+
+Package: com.itsme.invoicey.mobile
+Version: 3.1.5 (31500)
+Minimum Android version: Android 11 (API 30)
+
+The APK is signed with the corrective fresh-install key and verified with APK Signature Scheme v3. A physical Samsung Galaxy A16 was not available for this build; the automated storage and workflow checks ran in the Android runtime contract harness.
+
+
+
+
+
+
