@@ -1,9 +1,8 @@
 plugins { id 'com.android.application' }
 android {
     namespace 'com.itsme.invoicey'
-    compileSdk 35
-    def invoiceyApplicationId = project.findProperty('invoiceyApplicationId') ?: 'com.itsme.invoicey.proapp'
-    defaultConfig { applicationId invoiceyApplicationId; minSdk 30; targetSdk 35; versionCode 31500; versionName '3.1.5' }
+    compileSdk 36
+    defaultConfig { applicationId 'com.itsme.invoicey.fixed1'; minSdk 30; targetSdk 36; versionCode 31531; versionName '3.1.31' }
     buildFeatures { buildConfig true }
     compileOptions { sourceCompatibility JavaVersion.VERSION_11; targetCompatibility JavaVersion.VERSION_11 }
     signingConfigs {
