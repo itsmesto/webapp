@@ -4392,9 +4392,9 @@ const ASSET_CHUNK_SIZE = 20_000;
 const FORMAT_ID = 'itsme-invoicey-sqlite-xlsx-v1';
 
 const BACKUP_TABLES = [
-  'settings','app_metadata','sequences','companies','customers','suppliers','products','company_properties','services','projects',
+  'settings','app_metadata','sequences','companies','customers','suppliers','products','company_properties','resource_usage','services','projects',
   'invoices','invoice_items','payments','quotations','quotation_items','purchases','purchase_items',
-  'supplier_payments','expenses','expense_categories','expense_attachments','stock_movements','partners','profit_shares'
+  'supplier_payments','expenses','expense_categories','expense_attachments','stock_movements','partners','profit_shares','warranty_claims','warranty_claim_events','repair_intakes'
 ];
 
 const crcTable = (() => {
@@ -4809,13 +4809,13 @@ function parseBackupWorkbook(input, schema, expectations = {}) {
 
 
 const stamp=()=>new Date().toISOString();
-const scopes=['dashboard','customers','suppliers','products','company_properties','services','inventory','quotations','estimates','invoices','purchases','payments','expenses','profit','reports','partners','companies','users','backup','records'];
+const scopes=['dashboard','customers','suppliers','products','company_properties','services','inventory','quotations','estimates','invoices','purchases','payments','expenses','profit','reports','partners','warranty_claims','companies','users','backup','records'];
 const actions=['view','create','edit','delete','adjust','export','restore','manage','view_own'];
 const emptyPermissions=()=>Object.fromEntries(scopes.map(scope=>[scope,Object.fromEntries(actions.map(action=>[action,false]))]));
 function rolePermissions(role){
  const p=emptyPermissions(),allow=(scope,...acts)=>acts.forEach(action=>p[scope][action]=true);
  if(role==='company_admin'){for(const scope of scopes)for(const action of actions)p[scope][action]=true;p.companies.create=false;p.companies.delete=false;p.users.manage=true;p.backup.restore=true;p.records.delete=true;}
- if(role==='accountant'){for(const scope of ['dashboard','customers','suppliers','company_properties','invoices','purchases','payments','expenses','profit','reports','backup','partners'])allow(scope,'view');for(const scope of ['payments','expenses','partners','company_properties'])allow(scope,'create','edit');allow('backup','create','export','restore');}
+ if(role==='accountant'){for(const scope of ['dashboard','customers','suppliers','company_properties','invoices','purchases','payments','expenses','profit','reports','backup','partners','warranty_claims'])allow(scope,'view');for(const scope of ['payments','expenses','partners','company_properties'])allow(scope,'create','edit');allow('backup','create','export','restore');}
  if(role==='salesperson'){for(const scope of ['dashboard','customers','products','services','quotations','estimates','invoices'])allow(scope,'view','view_own');for(const scope of ['customers'])allow(scope,'create','edit');for(const scope of ['quotations','estimates','invoices'])allow(scope,'create','edit');}
  if(role==='storekeeper'){for(const scope of ['dashboard','products','company_properties','inventory','purchases','suppliers'])allow(scope,'view');allow('inventory','adjust');allow('purchases','create','edit');for(const action of ['create','edit'])allow('company_properties',action);}
  if(role==='manager'){for(const scope of scopes)for(const action of ['view','create','edit','adjust','export'])p[scope][action]=!['companies','users','records'].includes(scope);allow('users','view');allow('backup','view','export');}
@@ -4827,6 +4827,18 @@ const validPassword=value=>typeof value==='string'&&value.length>=12&&value.leng
 const validUsername=value=>typeof value==='string'&&value.length>=3&&value.length<=120&&(/^[a-z0-9._-]{3,40}$/.test(value)||/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value));
 const normalizeEmail=value=>String(value||'').trim().toLowerCase();
 const validEmail=value=>typeof value==='string'&&value.length<=254&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
+// The platform administrator has a separate, mandatory OTP sign-in path.
+// Keep this identity server-side so ordinary company users never receive an
+// administrator session merely by knowing the administrator credentials.
+const ADMIN_ACCESS_USERNAME='dhameera';
+const ADMIN_ACCESS_EMAIL='dhameera@hotmail.com';
+const adminUsername=value=>{const name=String(value||'').trim().toLowerCase();return name===ADMIN_ACCESS_EMAIL?ADMIN_ACCESS_USERNAME:name};
+const OTP_DIGITS=8;
+const otpDigitsForPurpose=purpose=>purpose==='registration'?6:OTP_DIGITS;
+const OTP_TTL_MS=5*60*1000;
+const OTP_RESEND_COOLDOWN_MS=60*1000;
+const OTP_MAX_ATTEMPTS=5;
+const protectedAdmin=user=>!!user?.active&&String(user.username||'').toLowerCase()===ADMIN_ACCESS_USERNAME;
 const normalizedBankDetails=value=>({bankName:String(value?.bankName??value?.bank_name??'').trim(),bankBranch:String(value?.bankBranch??value?.bank_branch??'').trim(),accountHolder:String(value?.accountHolder??value?.account_holder??'').trim(),bankAccountNumber:String(value?.bankAccountNumber??value?.bank_account_number??'').trim()});
 const bankChangeSubject=(actor,companyId,value)=>'bank-change:'+actor.userId+':'+companyId+':'+createHash('sha256').update(JSON.stringify(normalizedBankDetails(value))).digest('hex');
 const inertRecovery=()=>{const salt=crypto_randomBytes(16).toString('hex');return {salt,hash:access_control_scrypt(crypto_randomBytes(64).toString('hex'),salt)}};
@@ -4836,24 +4848,25 @@ class AccessControl {
   this.dataRoot=runtime_path.resolve(dataRoot);mkdirSync(this.dataRoot,{recursive:true});this.onCompanyCreate=onCompanyCreate;this.onCompanyUpdate=onCompanyUpdate;this.legacyProfile=legacyProfile;
   this.db=new DatabaseSync(registryPath);this.db.exec('PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON');
   this.db.exec(`CREATE TABLE IF NOT EXISTS companies(id TEXT PRIMARY KEY,name TEXT NOT NULL,profile_json TEXT NOT NULL,data_path TEXT NOT NULL,backup_dir TEXT NOT NULL,enabled INTEGER NOT NULL DEFAULT 1,user_limit INTEGER NOT NULL DEFAULT 15,role_limits_json TEXT NOT NULL,modules_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL);
-  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,password_salt TEXT NOT NULL,password_hash TEXT NOT NULL,recovery_salt TEXT NOT NULL,recovery_hash TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,is_super INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',email_verified INTEGER NOT NULL DEFAULT 0,birthday TEXT NOT NULL DEFAULT '',avatar_data TEXT NOT NULL DEFAULT '');
+  CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,username TEXT NOT NULL UNIQUE,display_name TEXT NOT NULL,password_salt TEXT NOT NULL,password_hash TEXT NOT NULL,recovery_salt TEXT NOT NULL,recovery_hash TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,is_super INTEGER NOT NULL DEFAULT 0,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',email_verified INTEGER NOT NULL DEFAULT 0);
   CREATE TABLE IF NOT EXISTS memberships(company_id TEXT NOT NULL REFERENCES companies(id),user_id TEXT NOT NULL REFERENCES users(id),role TEXT NOT NULL,active INTEGER NOT NULL DEFAULT 1,permissions_json TEXT NOT NULL,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,PRIMARY KEY(company_id,user_id));
-  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),active_company_id TEXT,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,last_seen TEXT NOT NULL);
+  CREATE TABLE IF NOT EXISTS sessions(token_hash TEXT PRIMARY KEY,user_id TEXT NOT NULL REFERENCES users(id),active_company_id TEXT,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,last_seen TEXT NOT NULL,user_agent TEXT NOT NULL DEFAULT '',ip_address TEXT NOT NULL DEFAULT '');
   CREATE TABLE IF NOT EXISTS audit(id TEXT PRIMARY KEY,user_id TEXT,company_id TEXT,username TEXT NOT NULL,company_name TEXT NOT NULL,action TEXT NOT NULL,details TEXT NOT NULL,created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS idx_sessions_user ON sessions(user_id);CREATE INDEX IF NOT EXISTS idx_audit_company_date ON audit(company_id,created_at);`);
   const userColumns=new Set(this.db.prepare('PRAGMA table_info(users)').all().map(column=>column.name));
   if(!userColumns.has('email'))this.db.exec("ALTER TABLE users ADD COLUMN email TEXT NOT NULL DEFAULT ''");
   if(!userColumns.has('email_verified'))this.db.exec('ALTER TABLE users ADD COLUMN email_verified INTEGER NOT NULL DEFAULT 0');
-  if(!userColumns.has('birthday'))this.db.exec("ALTER TABLE users ADD COLUMN birthday TEXT NOT NULL DEFAULT ''");
-  if(!userColumns.has('avatar_data'))this.db.exec("ALTER TABLE users ADD COLUMN avatar_data TEXT NOT NULL DEFAULT ''");
+  const sessionColumns=new Set(this.db.prepare('PRAGMA table_info(sessions)').all().map(column=>column.name));
+  if(!sessionColumns.has('user_agent'))this.db.exec("ALTER TABLE sessions ADD COLUMN user_agent TEXT NOT NULL DEFAULT ''");
+  if(!sessionColumns.has('ip_address'))this.db.exec("ALTER TABLE sessions ADD COLUMN ip_address TEXT NOT NULL DEFAULT ''");
+  // Legacy global flags never prove that this session completed Admin Access.
+  if(!sessionColumns.has('admin_verified_at'))this.db.exec("ALTER TABLE sessions ADD COLUMN admin_verified_at TEXT NOT NULL DEFAULT ''");
+  this.sessionMetadata=true;
   this.db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_verified_email ON users(lower(email)) WHERE email<>'';
   CREATE TABLE IF NOT EXISTS auth_email_otps(subject TEXT NOT NULL,purpose TEXT NOT NULL,email TEXT NOT NULL,salt TEXT NOT NULL,code_hash TEXT NOT NULL,attempts INTEGER NOT NULL DEFAULT 0,expires_at TEXT NOT NULL,created_at TEXT NOT NULL,PRIMARY KEY(subject,purpose));
+  CREATE TABLE IF NOT EXISTS auth_email_verifications(token_hash TEXT PRIMARY KEY,subject TEXT NOT NULL,purpose TEXT NOT NULL,email TEXT NOT NULL,expires_at TEXT NOT NULL,created_at TEXT NOT NULL);
   CREATE INDEX IF NOT EXISTS idx_auth_email_otps_expiry ON auth_email_otps(expires_at);`);
   this.rate=new Map();this.failedLogins=new Map();
-  for(const membership of this.db.prepare('SELECT company_id,user_id,role,permissions_json FROM memberships').all()){
-   let permissions={};try{permissions=JSON.parse(membership.permissions_json||'{}')}catch{}
-   if(!Object.prototype.hasOwnProperty.call(permissions,'company_properties')){permissions.company_properties=rolePermissions(membership.role).company_properties;this.db.prepare('UPDATE memberships SET permissions_json=?,updated_at=? WHERE company_id=? AND user_id=?').run(JSON.stringify(permissions),this.now(),membership.company_id,membership.user_id);}
-  }
  }
  close(){this.db.close()}
  now(){return stamp()}
@@ -4869,17 +4882,20 @@ class AccessControl {
   clearFailedLogin(req,username){this.failedLogins.delete(String(req.socket?.remoteAddress||'local')+':'+username)}
   emailOtpReady(){return globalThis.INVOICEY_EMAIL_READY===true&&typeof globalThis.INVOICEY_SEND_EMAIL==='function'}
   async sendEmailOtp(req,{subject,purpose,email}){
-   if(!this.emailOtpReady())throw Object.assign(new Error('Email verification is not configured on this server yet.'),{status:503});
+   if(!this.emailOtpReady())throw Object.assign(new Error('Email verification is not configured on this server yet.'),{status:503,publicMessage:'Email verification is not configured on this server yet.'});
+   const existing=this.scalar('SELECT created_at FROM auth_email_otps WHERE subject=? AND purpose=?',subject,purpose),createdAt=existing?Date.parse(existing.created_at):0;
+   if(createdAt&&Number.isFinite(createdAt)&&Date.now()-createdAt<OTP_RESEND_COOLDOWN_MS){const seconds=Math.max(1,Math.ceil((OTP_RESEND_COOLDOWN_MS-(Date.now()-createdAt))/1000));throw Object.assign(new Error(`Please wait ${seconds} seconds before requesting another code.`),{status:429})}
    if(!this.allowedRate(req,'email-otp:'+purpose+':'+subject,3))throw Object.assign(new Error('Too many code requests. Wait 15 minutes before trying again.'),{status:429});
-   const code=String(parseInt(crypto_randomBytes(4).toString('hex'),16)%1000000).padStart(6,'0'),salt=crypto_randomBytes(16).toString('hex'),at=this.now();
+   const digits=otpDigitsForPurpose(purpose),code=String(parseInt(crypto_randomBytes(4).toString('hex'),16)%(10**digits)).padStart(digits,'0'),salt=crypto_randomBytes(16).toString('hex'),at=this.now();
    this.run('DELETE FROM auth_email_otps WHERE expires_at<=?',at);
-   this.run('INSERT INTO auth_email_otps(subject,purpose,email,salt,code_hash,attempts,expires_at,created_at) VALUES(?,?,?,?,?,0,?,?) ON CONFLICT(subject,purpose) DO UPDATE SET email=excluded.email,salt=excluded.salt,code_hash=excluded.code_hash,attempts=0,expires_at=excluded.expires_at,created_at=excluded.created_at',subject,purpose,email,salt,access_control_scrypt(code,salt),new Date(Date.now()+10*60*1000).toISOString(),at);
-   try{await globalThis.INVOICEY_SEND_EMAIL({to:email,code,purpose})}catch(error){this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error('The email could not be sent. Check the server email settings and try again.'),{status:503})}
+   this.run('INSERT INTO auth_email_otps(subject,purpose,email,salt,code_hash,attempts,expires_at,created_at) VALUES(?,?,?,?,?,0,?,?) ON CONFLICT(subject,purpose) DO UPDATE SET email=excluded.email,salt=excluded.salt,code_hash=excluded.code_hash,attempts=0,expires_at=excluded.expires_at,created_at=excluded.created_at',subject,purpose,email,salt,access_control_scrypt(code,salt),new Date(Date.now()+OTP_TTL_MS).toISOString(),at);
+   try{await globalThis.INVOICEY_SEND_EMAIL({to:email,code,purpose})}catch(error){this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error('The email could not be sent. Check the server email settings and try again.'),{status:503,publicMessage:'The email could not be sent. Check the server email settings and try again.'})}
   }
   verifyEmailOtp(subject,purpose,email,code){
    const row=this.scalar('SELECT * FROM auth_email_otps WHERE subject=? AND purpose=? AND email=?',subject,purpose,email);
-   if(!row||row.expires_at<this.now()||row.attempts>=5){if(row)this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error('The verification code is invalid or expired. Request a new code.'),{status:400})}
-   if(!/^\d{6}$/.test(String(code||''))){this.run('UPDATE auth_email_otps SET attempts=attempts+1 WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error('Enter the six-digit verification code from your email.'),{status:400})}
+   if(!row||row.expires_at<this.now()||row.attempts>=OTP_MAX_ATTEMPTS){if(row)this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error('The verification code is invalid or expired. Request a new code.'),{status:400})}
+   const digits=otpDigitsForPurpose(purpose);
+   if(!new RegExp(`^\\d{${digits}}$`).test(String(code||''))){this.run('UPDATE auth_email_otps SET attempts=attempts+1 WHERE subject=? AND purpose=?',subject,purpose);throw Object.assign(new Error(`Enter the ${digits}-digit verification code from your email.`),{status:400})}
    this.run('UPDATE auth_email_otps SET attempts=attempts+1 WHERE subject=? AND purpose=?',subject,purpose);
    const expected=access_control_Buffer.from(row.code_hash,'hex'),actual=access_control_Buffer.from(access_control_scrypt(String(code||''),row.salt),'hex');
    if(!timingSafeEqual(expected,actual))throw Object.assign(new Error('The verification code is incorrect. Check it and try again.'),{status:400});
@@ -4893,32 +4909,49 @@ class AccessControl {
   const n=this.scalar('SELECT count(*) n FROM users').n;
    if(!n){let legacyCompany=null;try{legacyCompany=typeof this.legacyProfile==='function'?this.legacyProfile():this.legacyProfile}catch{}return {setupRequired:true,authenticated:false,legacyCompany,emailOtpAvailable:this.emailOtpReady()};}
    if(!actor)return {setupRequired:false,authenticated:false,emailOtpAvailable:this.emailOtpReady()};
-  const companies=actor.isSuper?this.all('SELECT id,name,enabled,user_limit AS userLimit,modules_json FROM companies WHERE enabled=1 ORDER BY name').map(c=>({...c,modules:JSON.parse(c.modules_json),modules_json:undefined})):this.userCompanies(actor.userId),active=companies.find(c=>c.id===actor.activeCompanyId)||null;
+   if(actor.isSuper){const identity=this.scalar('SELECT email,email_verified FROM users WHERE id=?',actor.userId);return {setupRequired:false,authenticated:true,emailOtpAvailable:this.emailOtpReady(),managementOnly:true,canSwitchCompanies:false,user:{id:actor.userId,username:actor.username,displayName:actor.displayName,email:identity?.email||'',emailVerified:!!identity?.email_verified,isSuper:true,role:'super_admin'},company:null,companies:[],permissions:emptyPermissions()};}
+   const companies=actor.isSuper?this.all('SELECT id,name,enabled,user_limit AS userLimit,modules_json FROM companies WHERE enabled=1 ORDER BY name').map(c=>({...c,modules:JSON.parse(c.modules_json),modules_json:undefined})):this.userCompanies(actor.userId),active=companies.find(c=>c.id===actor.activeCompanyId)||null;
+   const visibleCompanies=actor.isSuper||this.canSwitchCompanies(actor)?companies:(active?[active]:[]);
   const membership=active?this.scalar('SELECT role,permissions_json FROM memberships WHERE company_id=? AND user_id=? AND active=1',active.id,actor.userId):null;
-  const permissions=actor.isSuper?Object.fromEntries(scopes.map(scope=>[scope,Object.fromEntries(actions.map(a=>[a,true]))])):membership?JSON.parse(membership.permissions_json):emptyPermissions();
-    const identity=this.scalar('SELECT email,email_verified,birthday,avatar_data FROM users WHERE id=?',actor.userId);
-    return {setupRequired:false,authenticated:true,emailOtpAvailable:this.emailOtpReady(),user:{id:actor.userId,username:actor.username,displayName:actor.displayName,email:identity?.email||'',emailVerified:!!identity?.email_verified,birthday:identity?.birthday||'',avatarData:identity?.avatar_data||'',isSuper:!!actor.isSuper,role:membership?.role|| (actor.isSuper?'super_admin':null)},company:active,companies:actor.isSuper?this.all('SELECT id,name,enabled,user_limit AS userLimit,modules_json FROM companies ORDER BY name').map(c=>({...c,modules:JSON.parse(c.modules_json),modules_json:undefined})):companies,permissions};
+  let permissions=actor.isSuper?Object.fromEntries(scopes.map(scope=>[scope,Object.fromEntries(actions.map(a=>[a,true]))])):membership?JSON.parse(membership.permissions_json):emptyPermissions();
+  if(membership&&!Object.prototype.hasOwnProperty.call(permissions,'company_properties')){permissions.company_properties=rolePermissions(membership.role).company_properties;this.run('UPDATE memberships SET permissions_json=?,updated_at=? WHERE company_id=? AND user_id=?',JSON.stringify(permissions),this.now(),active.id,actor.userId);}
+  for(const scope of scopes)if(active?.modules?.[scope]===false)permissions[scope]=Object.fromEntries(actions.map(action=>[action,false]));
+   const identity=this.scalar('SELECT email,email_verified FROM users WHERE id=?',actor.userId);
+    return {setupRequired:false,authenticated:true,emailOtpAvailable:this.emailOtpReady(),user:{id:actor.userId,username:actor.username,displayName:actor.displayName,email:identity?.email||'',emailVerified:!!identity?.email_verified,isSuper:!!actor.isSuper,role:membership?.role|| (actor.isSuper?'super_admin':null)},company:active,companies:actor.isSuper?this.all('SELECT id,name,enabled,user_limit AS userLimit,modules_json FROM companies ORDER BY name').map(c=>({...c,modules:JSON.parse(c.modules_json),modules_json:undefined})):visibleCompanies,permissions};
  }
- userCompanies(userId){return this.all('SELECT c.id,c.name,c.enabled,c.user_limit AS userLimit,c.modules_json FROM companies c JOIN memberships m ON m.company_id=c.id WHERE m.user_id=? AND m.active=1 AND c.enabled=1 ORDER BY c.name',userId).map(c=>({...c,modules:JSON.parse(c.modules_json),modules_json:undefined}))}
+ primaryMembership(userId){return this.scalar('SELECT c.id,c.name,c.enabled,c.user_limit AS userLimit,c.modules_json,m.active FROM memberships m JOIN companies c ON c.id=m.company_id WHERE m.user_id=? ORDER BY m.created_at,m.rowid LIMIT 1',userId)}
+ userCompanies(userId){const c=this.primaryMembership(userId);return c?.active&&c.enabled?[{id:c.id,name:c.name,enabled:c.enabled,userLimit:c.userLimit,modules:JSON.parse(c.modules_json)}]:[]}
  companyConfig(id){const row=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',id);if(!row)return null;return {id:row.id,name:row.name,profile:JSON.parse(row.profile_json),dataPath:row.data_path,backupDir:row.backup_dir,userLimit:row.user_limit,roleLimits:JSON.parse(row.role_limits_json),modules:JSON.parse(row.modules_json),enabled:!!row.enabled}}
- updateProfile(actor,companyId,profile){if(!actor.isSuper&&!this.scalar("SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1 AND role='company_admin'",companyId,actor.userId))throw Object.assign(new Error('Company administrator access is required.'),{status:403});const row=this.scalar('SELECT profile_json FROM companies WHERE id=?',companyId);if(!row)throw new Error('Company not found.');this.run('UPDATE companies SET name=?,profile_json=?,updated_at=? WHERE id=?',profile.name,JSON.stringify(profile),this.now(),companyId);return {success:true}}
+ updateProfile(actor,companyId,profile){this.requireCompanyAdmin(actor,companyId);const row=this.scalar('SELECT profile_json FROM companies WHERE id=?',companyId);if(!row)throw new Error('Company not found.');this.run('UPDATE companies SET name=?,profile_json=?,updated_at=? WHERE id=?',profile.name,JSON.stringify(profile),this.now(),companyId);return {success:true}}
  authenticate(req){
   const token=this.parseCookie(req);if(!token||token.length<32)return null;const hash=createHash('sha256').update(token).digest('hex');
   const session=this.scalar('SELECT s.*,u.username,u.display_name,u.active,u.is_super FROM sessions s JOIN users u ON u.id=s.user_id WHERE s.token_hash=?',hash);
   if(!session||!session.active||session.expires_at<this.now()){if(session)this.run('DELETE FROM sessions WHERE token_hash=?',hash);return null}
+  const isSuper=protectedAdmin(session)&&!!session.admin_verified_at;
+  if(protectedAdmin(session)&&!isSuper){this.run('DELETE FROM sessions WHERE token_hash=?',hash);return null;}
+  const assigned=this.primaryMembership(session.user_id);
+  if(!isSuper&&(!assigned?.active||!assigned.enabled||assigned.id!==session.active_company_id)){this.run('DELETE FROM sessions WHERE token_hash=?',hash);return null;}
+  if(isSuper&&session.active_company_id){this.run('UPDATE sessions SET active_company_id=NULL WHERE token_hash=?',hash);session.active_company_id=null;}
   this.run('UPDATE sessions SET expires_at=?,last_seen=? WHERE token_hash=?',new Date(Date.now()+12*3600000).toISOString(),this.now(),hash);
   const membership=session.active_company_id?this.scalar('SELECT active,role FROM memberships WHERE company_id=? AND user_id=?',session.active_company_id,session.user_id):null;
   if(session.active_company_id&&!session.is_super&&(!membership?.active||!this.scalar('SELECT enabled FROM companies WHERE id=?',session.active_company_id)?.enabled))return null;
-  return {userId:session.user_id,username:session.username,displayName:session.display_name,isSuper:!!session.is_super,role:membership?.role||(session.is_super?'super_admin':null),activeCompanyId:session.active_company_id,sessionHash:hash};
+  return {userId:session.user_id,username:session.username,displayName:session.display_name,isSuper,role:isSuper?'super_admin':membership?.role,activeCompanyId:session.active_company_id,sessionHash:hash};
  }
- createSession(userId,companyId){const token=crypto_randomBytes(32).toString('base64url'),hash=createHash('sha256').update(token).digest('hex'),at=this.now();this.run('INSERT INTO sessions VALUES(?,?,?,?,?,?)',hash,userId,companyId,new Date(Date.now()+12*3600000).toISOString(),at,at);return {token,hash}}
+ createSession(userId,companyId,req=null,platformVerified=false){const token=crypto_randomBytes(32).toString('base64url'),hash=createHash('sha256').update(token).digest('hex'),at=this.now(),agent=String(req?.headers?.['user-agent']||'').slice(0,300),ip=String(req?.socket?.remoteAddress||'').slice(0,120);this.run('INSERT INTO sessions(token_hash,user_id,active_company_id,expires_at,created_at,last_seen,user_agent,ip_address,admin_verified_at) VALUES(?,?,?,?,?,?,?,?,?)',hash,userId,companyId,new Date(Date.now()+12*3600000).toISOString(),at,at,agent,ip,platformVerified?at:'');return {token,hash}}
  actorUser(id){return this.scalar('SELECT id AS userId,username,display_name AS displayName,is_super AS isSuper FROM users WHERE id=?',id)}
+ isPlatformUser(user){return String(user?.username||'').toLowerCase()===ADMIN_ACCESS_USERNAME}
  async handleApi(req,url,body){
   const p=url.pathname,m=req.method;
+  if(m==='POST'&&['/api/auth/setup','/api/auth/signup'].includes(p)&&String(body.password||'')!==String((p==='/api/auth/setup'?body.passwordConfirm:body.confirmPassword)||''))throw new Error('The password confirmations do not match.');
+  if(m==='POST'&&p==='/api/auth/recover'&&String(body.newPassword||'')!==String(body.newPasswordConfirm||''))throw Object.assign(new Error('The password confirmations do not match.'),{status:400});
+  if(m==='POST'&&p==='/api/auth/change-password'&&String(body.newPassword||'')!==String(body.newPasswordConfirm||''))throw new Error('The password confirmations do not match.');
+  if(m==='POST'&&p==='/api/admin/users'&&body.password&&String(body.password)!==String(body.passwordConfirm||''))throw new Error('The password confirmations do not match.');
+  if(m==='PUT'&&/^\/api\/admin\/users\/[^/]+$/.test(p)&&body.resetPassword&&String(body.newPassword||'')!==String(body.newPasswordConfirm||''))throw new Error('The password confirmations do not match.');
+  if(m==='POST'&&p==='/api/admin/companies'&&body.admin?.password&&String(body.admin.password)!==String(body.admin.passwordConfirm||''))throw new Error('The password confirmations do not match.');
   if(process.env.INVOICEY_HOSTED==='1'&&m==='POST'&&['/api/auth/setup','/api/auth/signup','/api/admin/companies'].includes(p)&&body.backupDir)throw Object.assign(new Error('Hosted company storage is assigned by the server.'),{status:400});
-  if(m==='GET'&&p==='/api/auth/status')return {body:this.status(this.authenticate(req))};
+  if(m==='GET'&&p==='/api/auth/status')return {body:{...this.status(this.authenticate(req)),securityVersion:'20261022-private-accounts-1'}};
    if(m==='POST'&&p==='/api/auth/email-otp/request'){
-    if(!this.emailOtpReady())throw Object.assign(new Error('Email verification is not configured on this server yet.'),{status:503});
+    if(!this.emailOtpReady())throw Object.assign(new Error('Email verification is not configured on this server yet.'),{status:503,publicMessage:'Email verification is not configured on this server yet.'});
     const purpose=String(body.purpose||'');
     if(purpose==='registration'){
      const email=normalizeEmail(body.email);if(!validEmail(email))throw new Error('Enter a valid email address.');
@@ -4927,9 +4960,19 @@ class AccessControl {
     }
     if(purpose==='password-reset'){
      const email=normalizeEmail(body.email);if(!validEmail(email))throw new Error('Enter a valid email address.');if(!this.allowedRate(req,'password-reset:'+email,5))throw Object.assign(new Error('Too many code requests. Wait 15 minutes before trying again.'),{status:429});
-     const user=this.scalar('SELECT id,email,email_verified,active FROM users WHERE lower(email)=?',email);
-     if(user?.active&&user.email_verified&&validEmail(user.email))await this.sendEmailOtp(req,{subject:user.id,purpose,email:user.email});
+     const user=this.scalar('SELECT id,username,email,email_verified,active,is_super FROM users WHERE lower(email)=?',email)
+      || (email===ADMIN_ACCESS_EMAIL?this.scalar('SELECT id,username,email,email_verified,active,is_super FROM users WHERE lower(username)=?',ADMIN_ACCESS_USERNAME):null);
+     if(email===ADMIN_ACCESS_EMAIL&&!user){await this.sendEmailOtp(req,{subject:'platform-admin-bootstrap',purpose:'admin-setup',email:ADMIN_ACCESS_EMAIL});return {body:{success:true,message:'If the account has a verified email, a code has been sent.'}};}
+     const targetEmail=protectedAdmin(user)?ADMIN_ACCESS_EMAIL:user?.email;
+     if(user?.active&&validEmail(targetEmail)&&(protectedAdmin(user)||user.email_verified))await this.sendEmailOtp(req,{subject:user.id,purpose,email:targetEmail});
      return {body:{success:true,message:'If the account has a verified email, a code has been sent.'}};
+    }
+    if(purpose==='admin-login'){
+     const username=adminUsername(body.username),password=String(body.password||''),user=this.scalar('SELECT * FROM users WHERE username=?',username),dummySalt='0123456789abcdef0123456789abcdef';
+     if(!this.allowedRate(req,'admin-login-request:'+username,3))throw Object.assign(new Error('Too many code requests. Wait 15 minutes before trying again.'),{status:429});
+     const hash=access_control_scrypt(password,user?.password_salt||dummySalt),expected=user?.password_hash||access_control_scrypt('__invalid-admin-password__',dummySalt),matches=timingSafeEqual(access_control_Buffer.from(hash,'hex'),access_control_Buffer.from(expected,'hex'));
+     if(matches&&user?.active&&protectedAdmin(user))await this.sendEmailOtp(req,{subject:user.id,purpose,email:ADMIN_ACCESS_EMAIL});
+     return {body:{success:true,message:'If the administrator details are valid, a one-time code was sent to the administrator email.'}};
     }
     if(purpose==='admin-user'||purpose==='company-admin'){
      const actor=this.authenticate(req);if(!actor)throw Object.assign(new Error('Sign in again before verifying an account email.'),{status:401});
@@ -4937,6 +4980,7 @@ class AccessControl {
      let subject;
      if(purpose==='admin-user'){const companyId=String(body.companyId||actor.activeCompanyId||'');this.requireCompanyAdmin(actor,companyId);subject=`admin-user:${actor.userId}:${companyId}:${email}`}
      else{this.requireSuper(actor);subject=`${actor.userId}:company-admin:${email}`}
+     if(email===ADMIN_ACCESS_EMAIL)throw Object.assign(new Error('The platform administrator email is reserved. Use a separate email for this company account.'),{status:403});
      if(this.scalar('SELECT id FROM users WHERE lower(email)=?',email))throw Object.assign(new Error('This email address is already connected to an account.'),{status:409});
      if(!this.allowedRate(req,'new-account-email:'+actor.userId,5))throw Object.assign(new Error('Too many code requests. Wait 15 minutes before trying again.'),{status:429});
      await this.sendEmailOtp(req,{subject,purpose,email});return {body:{success:true,message:'A verification code was sent to that email address.'}};
@@ -4961,12 +5005,32 @@ class AccessControl {
     }
     throw new Error('Choose a supported email verification action.');
    }
+  if(m==='POST'&&p==='/api/auth/email-otp/verify'){
+   const purpose=String(body.purpose||''),email=normalizeEmail(body.email),code=String(body.otp||body.code||'');
+   if(purpose!=='registration')throw Object.assign(new Error('This verification flow is not available.'),{status:400});
+   if(!validEmail(email))throw new Error('Enter a valid email address.');
+   this.verifyEmailOtp(email,purpose,email,code);
+   const token=crypto_randomBytes(32).toString('base64url'),at=this.now(),expiresAt=new Date(Date.now()+OTP_TTL_MS).toISOString();
+   this.run('DELETE FROM auth_email_verifications WHERE expires_at<=?',at);
+   this.run('INSERT INTO auth_email_verifications(token_hash,subject,purpose,email,expires_at,created_at) VALUES(?,?,?,?,?,?)',createHash('sha256').update(token).digest('hex'),email,purpose,email,expiresAt,at);
+   return {body:{success:true,verificationToken:token,expiresAt,message:'Email verified. Continue to create your password.'}};
+  }
+  if(m==='POST'&&p==='/api/auth/admin-otp/verify'){
+   const username=adminUsername(body.username),password=String(body.password||''),user=this.scalar('SELECT * FROM users WHERE username=?',username),dummySalt='0123456789abcdef0123456789abcdef';
+   if(!this.allowedRate(req,'admin-login-verify:'+username,8))throw Object.assign(new Error('Too many verification attempts. Wait 15 minutes before trying again.'),{status:429});
+   const hash=access_control_scrypt(password,user?.password_salt||dummySalt),expected=user?.password_hash||access_control_scrypt('__invalid-admin-password__',dummySalt),matches=timingSafeEqual(access_control_Buffer.from(hash,'hex'),access_control_Buffer.from(expected,'hex'));
+   if(!matches||!user?.active||!protectedAdmin(user))throw Object.assign(new Error('Administrator username or password is incorrect.'),{status:401});
+   this.verifyEmailOtp(user.id,'admin-login',ADMIN_ACCESS_EMAIL,String(body.otp||''));this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',user.id,'admin-login');this.clearFailedLogin(req,username);
+   const actor={userId:user.id,username:user.username,displayName:user.display_name,isSuper:true},ses=this.createSession(user.id,null,req,true);this.auditRow(actor,null,'auth.admin_login_otp');return {body:{...this.status({...actor,activeCompanyId:null}),success:true},cookie:this.cookie(ses.token)};
+  }
   if(m==='POST'&&p==='/api/auth/setup'){
    if(this.scalar('SELECT id FROM users LIMIT 1'))throw Object.assign(new Error('Initial setup is already complete.'),{status:409});
    if(!this.allowedRate(req,'setup'))throw Object.assign(new Error('Too many setup attempts. Try again shortly.'),{status:429});
     const profile=body.company||{},name=String(profile.name||'').trim(),username=String(body.username||'').trim().toLowerCase(),displayName=String(body.displayName||'').trim(),password=body.password,accountEmail=normalizeEmail(body.accountEmail),emailOtp=String(body.emailOtp||''),superUsername=String(body.superUsername||'').trim().toLowerCase(),superPassword=body.superPassword,superDisplayName=String(body.superDisplayName||'Super Administrator').trim(),hasSeparateSuper=!!(superUsername||superPassword||body.superDisplayName);
+    if(String(password||'')!==String(body.passwordConfirm||''))throw new Error('The password confirmations do not match.');
     if(!name||!username||!displayName||!validPassword(password)||!validUsername(username))throw new Error('Enter a company name, administrator name, valid username or email, and a password of at least 12 characters.');
     if(!validEmail(accountEmail))throw new Error('Enter a valid administrator email address.');this.verifyEmailOtp(accountEmail,'registration',accountEmail,emailOtp);
+   if(username===ADMIN_ACCESS_USERNAME||accountEmail===ADMIN_ACCESS_EMAIL||hasSeparateSuper)throw Object.assign(new Error('Create a company account here. Platform administrator setup requires verification through Admin Access password recovery.'),{status:403});
    if(hasSeparateSuper){
     if(username===superUsername||!validUsername(superUsername)||!validPassword(superPassword))throw new Error('The optional software administrator details require a different valid username and a password of at least 12 characters.');
    }
@@ -4977,22 +5041,30 @@ class AccessControl {
    try{this.onCompanyCreate(company,{isInitial:true});this.txn(()=>{
     this.run('INSERT INTO companies VALUES(?,?,?,?,?,?,?,?,?,?,?)',company.id,company.name,JSON.stringify(company.profile),company.dataPath,company.backupDir,1,15,JSON.stringify(company.role_limits),JSON.stringify(company.modules),at,at);
      this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',accountEmail,'registration');
-     this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',userId,username,displayName,passwordSalt,access_control_scrypt(password,passwordSalt),recovery.salt,recovery.hash,1,hasSeparateSuper?0:1,at,at,accountEmail,1);
+     this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',userId,username,displayName,passwordSalt,access_control_scrypt(password,passwordSalt),recovery.salt,recovery.hash,1,0,at,at,accountEmail,1);
     this.run('INSERT INTO memberships VALUES(?,?,?,?,?,?,?)',companyId,userId,'company_admin',1,JSON.stringify(rolePermissions('company_admin')),at,at);
      if(hasSeparateSuper){this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',superUserId,superUsername,superDisplayName,superSalt,access_control_scrypt(superPassword,superSalt),superRecovery.salt,superRecovery.hash,1,1,at,at,'',0);}
-    const actor={userId,username,displayName,isSuper:!hasSeparateSuper};this.auditRow(actor,companyId,'setup.completed');if(hasSeparateSuper)this.auditRow({userId:superUserId,username:superUsername,displayName:superDisplayName,isSuper:true},companyId,'super_admin.created');
+    const actor={userId,username,displayName,isSuper:false};this.auditRow(actor,companyId,'setup.completed');if(hasSeparateSuper)this.auditRow({userId:superUserId,username:superUsername,displayName:superDisplayName,isSuper:true},companyId,'super_admin.created');
    })}catch(error){throw error}
-   const session=this.createSession(userId,companyId);return {body:{success:true,setupRequired:false,authenticated:true,user:{id:userId,username,displayName,isSuper:!hasSeparateSuper,role:'company_admin'},company:{id:companyId,name},companies:[{id:companyId,name}],permissions:rolePermissions('company_admin'),superUsername:hasSeparateSuper?superUsername:''},cookie:this.cookie(session.token)};
+   const session=this.createSession(userId,companyId);return {body:{success:true,setupRequired:false,authenticated:true,user:{id:userId,username,displayName,isSuper:false,role:'company_admin'},company:{id:companyId,name},companies:[{id:companyId,name}],permissions:rolePermissions('company_admin'),superUsername:hasSeparateSuper?superUsername:''},cookie:this.cookie(session.token)};
   }
   if(m==='POST'&&p==='/api/auth/signup'){
    if(!this.scalar('SELECT id FROM users LIMIT 1'))throw Object.assign(new Error('Complete first-time setup before creating another account.'),{status:409});
    if(!this.allowedRate(req,'signup'))throw Object.assign(new Error('Too many account creation attempts. Try again shortly.'),{status:429});
     const profile=body.company||{},name=String(profile.name||'').trim(),username=String(body.username||'').trim().toLowerCase(),displayName=String(body.displayName||'').trim(),password=body.password,accountEmail=normalizeEmail(body.accountEmail),emailOtp=String(body.emailOtp||'');
+    if(String(password||'')!==String(body.confirmPassword||''))throw new Error('The password confirmations do not match.');
     if(!name||name.length>160||!displayName||displayName.length>120||!/^[a-z0-9._-]{3,40}$/.test(username)||!validPassword(password))throw new Error('Enter a company name, your full name, a valid username, and a password of at least 12 characters.');
     if(!validEmail(accountEmail))throw new Error('Enter a valid account email address.');
     if(this.scalar('SELECT id FROM users WHERE username=?',username))throw Object.assign(new Error('That username is already in use. Choose another username.'),{status:409});if(this.scalar('SELECT id FROM users WHERE lower(email)=?',accountEmail))throw Object.assign(new Error('This email address is already connected to an account.'),{status:409});
    if(this.scalar('SELECT id FROM companies WHERE lower(name)=lower(?)',name))throw Object.assign(new Error('A business with that name already exists. Choose another name.'),{status:409});
-   this.verifyEmailOtp(accountEmail,'registration',accountEmail,emailOtp);
+   if(username===ADMIN_ACCESS_USERNAME||accountEmail===ADMIN_ACCESS_EMAIL)throw Object.assign(new Error('This identity is reserved for separate platform administration.'),{status:403});
+   const verificationToken=String(body.verificationToken||''),verificationHash=verificationToken?createHash('sha256').update(verificationToken).digest('hex'):'';
+   if(verificationToken){
+    const verification=this.scalar('SELECT * FROM auth_email_verifications WHERE token_hash=? AND subject=? AND purpose=? AND email=?',verificationHash,accountEmail,'registration',accountEmail);
+    if(!verification||verification.expires_at<this.now())throw Object.assign(new Error('Email verification expired. Request a new code.'),{status:400});
+    this.run('DELETE FROM auth_email_verifications WHERE token_hash=?',verificationHash);
+    this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',accountEmail,'registration');
+   }else this.verifyEmailOtp(accountEmail,'registration',accountEmail,emailOtp);
    const companyId=randomUUID(),userId=randomUUID(),at=this.now(),passwordSalt=crypto_randomBytes(16).toString('hex'),recovery=inertRecovery(),backupDir=runtime_path.join(this.dataRoot,companyId,'backups'),dataPath=runtime_path.join(this.dataRoot,companyId,'business.sqlite'),roleLimits={company_admin:2,accountant:3,salesperson:10,storekeeper:10,manager:10,custom:10},modules=Object.fromEntries(scopes.map(s=>[s,true])),company={id:companyId,name,profile:{...profile,name},dataPath,backupDir,user_limit:15,role_limits:roleLimits,modules,enabled:1};
    mkdirSync(runtime_path.dirname(dataPath),{recursive:true});mkdirSync(backupDir,{recursive:true});this.onCompanyCreate(company,{isInitial:false});
     this.txn(()=>{this.run('INSERT INTO companies VALUES(?,?,?,?,?,?,?,?,?,?,?)',companyId,name,JSON.stringify(company.profile),dataPath,backupDir,1,15,JSON.stringify(roleLimits),JSON.stringify(modules),at,at);this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',accountEmail,'registration');this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',userId,username,displayName,passwordSalt,access_control_scrypt(password,passwordSalt),recovery.salt,recovery.hash,1,0,at,at,accountEmail,1);this.run('INSERT INTO memberships VALUES(?,?,?,?,?,?,?)',companyId,userId,'company_admin',1,JSON.stringify(rolePermissions('company_admin')),at,at);const actor={userId,username,displayName,isSuper:false};this.auditRow(actor,companyId,'auth.signup');this.auditRow(actor,companyId,'company.created',name)});
@@ -5004,8 +5076,11 @@ class AccessControl {
    const dummySalt='0123456789abcdef0123456789abcdef';const matches=user&&user.active&&timingSafeEqual(access_control_Buffer.from(access_control_scrypt(String(body.password||''),user.password_salt),'hex'),access_control_Buffer.from(user.password_hash,'hex'));
    if(!matches){access_control_scrypt(String(body.password||''),dummySalt);const failures=this.recordFailedLogin(req,username);if(failures===4&&user?.active&&user.email_verified&&validEmail(user.email)&&this.emailOtpReady()){try{await this.sendEmailOtp(req,{subject:user.id,purpose:'password-reset',email:user.email});}catch{}}const message=failures>=4?'Four failed sign-in attempts reached. Use “Forgot password?” to reset securely with the one-time code sent to your verified email.':'Username or password is incorrect.';throw Object.assign(new Error(message),{status:401})}
    this.clearFailedLogin(req,username);
-   let companies=this.userCompanies(user.id);if(user.is_super)companies=this.all('SELECT id,name,enabled,user_limit AS userLimit FROM companies WHERE enabled=1 ORDER BY name');
-   const company=companies.find(c=>c.id===body.companyId)||companies[0]||null,actor={userId:user.id,username:user.username,displayName:user.display_name,isSuper:!!user.is_super};
+   if(protectedAdmin(user))throw Object.assign(new Error('Administrator sign-in requires Admin Access and the one-time code sent to the administrator email.'),{status:403});
+   const companies=this.userCompanies(user.id),company=companies[0]||null;
+   if(!company)throw Object.assign(new Error('Your company account is inactive. Contact your company administrator.'),{status:403});
+   if(body.companyId&&body.companyId!==company.id)throw Object.assign(new Error('This account belongs to a different company. Sign in with that company’s own account.'),{status:403});
+   const actor={userId:user.id,username:user.username,displayName:user.display_name,isSuper:false};
    const ses=this.createSession(user.id,company?.id||null);this.auditRow(actor,company?.id,'auth.login');return {body:{...this.status({...actor,activeCompanyId:company?.id||null}),success:true},cookie:this.cookie(ses.token)};
   }
   const actor=this.authenticate(req);
@@ -5020,50 +5095,62 @@ class AccessControl {
   if(m==='POST'&&p==='/api/auth/recover-code')throw Object.assign(new Error('Recovery-code password reset is no longer supported. Use your verified account email.'),{status:410});
   if(m==='POST'&&p==='/api/auth/recover'){
    const email=normalizeEmail(body.email);if(!this.allowedRate(req,'recover:'+email,5))throw Object.assign(new Error('Too many recovery attempts. Wait 15 minutes before trying again.'),{status:429});
-   const password=body.newPassword,user=validEmail(email)?this.scalar('SELECT * FROM users WHERE lower(email)=?',email):null;
-   if(!user||!user.active||!user.email_verified||!validPassword(password))throw Object.assign(new Error('The account, email code or new password could not be verified.'),{status:400});
-   this.verifyEmailOtp(user.id,'password-reset',user.email,String(body.emailOtp||''));
-   const salt=crypto_randomBytes(16).toString('hex');this.txn(()=>{this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',user.id,'password-reset');this.run('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?',salt,access_control_scrypt(password,salt),this.now(),user.id);this.run('DELETE FROM sessions WHERE user_id=?',user.id);this.auditRow({userId:user.id,username:user.username},null,'auth.password_recovered')});return {body:{success:true,message:'Password reset. Sign in with the new password.'},cookie:this.clearCookie()};
+   const password=body.newPassword,user=validEmail(email)?(this.scalar('SELECT * FROM users WHERE lower(email)=?',email)||
+    (email===ADMIN_ACCESS_EMAIL?this.scalar('SELECT * FROM users WHERE lower(username)=?',ADMIN_ACCESS_USERNAME):null)):null,targetEmail=protectedAdmin(user)?ADMIN_ACCESS_EMAIL:user?.email;
+   if(String(password||'')!==String(body.newPasswordConfirm||''))throw Object.assign(new Error('The password confirmations do not match.'),{status:400});
+   if(!user&&email===ADMIN_ACCESS_EMAIL){
+    if(!validPassword(password))throw Object.assign(new Error('New password must contain at least 12 characters.'),{status:400});
+    this.verifyEmailOtp('platform-admin-bootstrap','admin-setup',ADMIN_ACCESS_EMAIL,String(body.emailOtp||''));
+    const id=randomUUID(),salt=crypto_randomBytes(16).toString('hex'),recovery=inertRecovery(),at=this.now();
+    this.txn(()=>{this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?','platform-admin-bootstrap','admin-setup');this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',id,ADMIN_ACCESS_USERNAME,'Platform administrator',salt,access_control_scrypt(password,salt),recovery.salt,recovery.hash,1,1,at,at,ADMIN_ACCESS_EMAIL,1);this.auditRow({userId:id,username:ADMIN_ACCESS_USERNAME},null,'auth.admin_provisioned');});
+    return {body:{success:true,adminLoginRequired:true,message:'Administrator account secured. Continue through Admin Access with a new sign-in code.'},cookie:this.clearCookie()};
+   }
+   if(!user||!user.active||!validEmail(targetEmail)||(!protectedAdmin(user)&&!user.email_verified)||!validPassword(password))throw Object.assign(new Error('The account, email code or new password could not be verified.'),{status:400});
+   this.verifyEmailOtp(user.id,'password-reset',targetEmail,String(body.emailOtp||''));
+   const salt=crypto_randomBytes(16).toString('hex');this.txn(()=>{this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',user.id,'password-reset');this.run('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?',salt,access_control_scrypt(password,salt),this.now(),user.id);if(protectedAdmin(user))this.run('UPDATE users SET email=?,email_verified=1,updated_at=? WHERE id=?',ADMIN_ACCESS_EMAIL,this.now(),user.id);this.run('DELETE FROM sessions WHERE user_id=?',user.id);this.auditRow({userId:user.id,username:user.username},null,'auth.password_recovered')});return {body:{success:true,adminLoginRequired:protectedAdmin(user),message:'Password reset. Sign in with the new password.'},cookie:this.clearCookie()};
   }
   if(m==='POST'&&p==='/api/auth/logout'){
    if(actor){this.auditRow(actor,actor.activeCompanyId,'auth.logout');this.run('DELETE FROM sessions WHERE token_hash=?',actor.sessionHash)}return {body:{success:true},cookie:this.clearCookie()};
   }
   if(!actor)throw Object.assign(new Error('Sign in to continue.'),{status:401});
+  const platformResult=platformAdmin?.handle(req,url,body,actor);if(platformResult)return platformResult;
   if(m==='POST'&&p==='/api/auth/change-password'){
-   const user=this.scalar('SELECT * FROM users WHERE id=?',actor.userId);if(!timingSafeEqual(access_control_Buffer.from(access_control_scrypt(String(body.currentPassword||''),user.password_salt),'hex'),access_control_Buffer.from(user.password_hash,'hex')))throw Object.assign(new Error('Current password is incorrect.'),{status:400});if(!validPassword(body.newPassword))throw new Error('New password must contain at least 12 characters.');
+   const user=this.scalar('SELECT * FROM users WHERE id=?',actor.userId);if(!timingSafeEqual(access_control_Buffer.from(access_control_scrypt(String(body.currentPassword||''),user.password_salt),'hex'),access_control_Buffer.from(user.password_hash,'hex')))throw Object.assign(new Error('Current password is incorrect.'),{status:400});if(String(body.newPassword||'')!==String(body.newPasswordConfirm||''))throw new Error('The password confirmations do not match.');if(!validPassword(body.newPassword))throw new Error('New password must contain at least 12 characters.');
    const salt=crypto_randomBytes(16).toString('hex');this.txn(()=>{this.run('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?',salt,access_control_scrypt(body.newPassword,salt),this.now(),actor.userId);this.run('DELETE FROM sessions WHERE user_id=? AND token_hash<>?',actor.userId,actor.sessionHash);this.auditRow(actor,actor.activeCompanyId,'auth.password_changed')});return {body:{success:true}};
   }
-   if(m==='PUT'&&p==='/api/auth/profile'){
-    const displayName=String(body.displayName||'').trim(),birthday=String(body.birthday||'').trim(),avatarData=String(body.avatarData||'');
-    if(!displayName||displayName.length>120)throw new Error('Enter a name up to 120 characters.');
-    if(birthday&&!/^\d{4}-\d{2}-\d{2}$/.test(birthday))throw new Error('Enter a valid birthday.');
-    if(birthday&&birthday>this.now().slice(0,10))throw new Error('Birthday cannot be in the future.');
-    if(avatarData&&!/^data:image\/(?:jpeg|png|webp);base64,[A-Za-z0-9+/=\r\n]+$/.test(avatarData))throw new Error('Profile photo must be a PNG, JPG or WebP image.');
-    if(avatarData.length>900000)throw new Error('Profile photo must be 650 KB or smaller.');
-    this.run('UPDATE users SET display_name=?,birthday=?,avatar_data=?,updated_at=? WHERE id=?',displayName,birthday,avatarData,this.now(),actor.userId);this.auditRow(actor,actor.activeCompanyId,'auth.profile_updated');return {body:{success:true}};
-   }
   if(m==='POST'&&p==='/api/auth/select-company'){
-   const companyId=String(body.companyId||''),company=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',companyId);
-   const member=company&&(actor.isSuper||this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1',companyId,actor.userId));if(!member)throw Object.assign(new Error('You do not have access to that company.'),{status:403});
-   this.run('UPDATE sessions SET active_company_id=? WHERE token_hash=?',companyId,actor.sessionHash);this.auditRow(actor,companyId,'company.switched');return {body:this.status({...actor,activeCompanyId:companyId})};
+   throw Object.assign(new Error('Company switching is disabled. Platform administrators manage account access without opening private company records.'),{status:403});
   }
   if(m==='GET'&&p==='/api/admin/companies'){
    this.requireSuper(actor);return {body:this.all('SELECT c.id,c.name,c.enabled,c.user_limit AS userLimit,(SELECT count(*) FROM memberships m WHERE m.company_id=c.id AND m.active=1) AS userCount,c.role_limits_json,c.modules_json,c.created_at,c.updated_at FROM companies c ORDER BY c.created_at').map(c=>({...c,roleLimits:JSON.parse(c.role_limits_json),modules:JSON.parse(c.modules_json),role_limits_json:undefined,modules_json:undefined}))};
   }
   if(m==='POST'&&p==='/api/admin/companies'){
+   this.requireSuper(actor);
+   if(adminUsername(body.admin?.username)===ADMIN_ACCESS_USERNAME||normalizeEmail(body.admin?.email)===ADMIN_ACCESS_EMAIL)throw Object.assign(new Error('Platform administrators cannot belong to company workspaces.'),{status:403});
+   if(this.scalar('SELECT id FROM users WHERE lower(username)=?',String(body.admin?.username||'').trim().toLowerCase()))throw Object.assign(new Error('Each company requires a separate user account. This username is already registered.'),{status:409});
    this.requireSuper(actor);const profile=body.company||{},name=String(profile.name||'').trim(),admin=body.admin||{};if(!name)throw new Error('Company name is required.');if(this.scalar('SELECT id FROM companies WHERE lower(name)=lower(?)',name))throw Object.assign(new Error('A business with that name already exists.'),{status:409});const adminUsername=String(admin.username||'').trim().toLowerCase(),adminPassword=String(admin.password||''),adminEmail=normalizeEmail(admin.email),adminEmailOtp=String(admin.emailOtp||''),user=this.scalar('SELECT * FROM users WHERE username=?',adminUsername),userId=user?.id||randomUUID();if(!/^[a-z0-9._-]{3,40}$/.test(adminUsername)||(!user&&!validPassword(adminPassword)))throw new Error('Add a company administrator with a valid username and a password of at least 12 characters.');if(user?.is_super)throw new Error('A super administrator account cannot also be a company administrator.');if(user&&(!user.email_verified||!validEmail(user.email)))throw new Error('This existing account needs a verified email before it can be added to a company.');if(!user){if(!validEmail(adminEmail))throw new Error('Enter the new company administrator’s email address.');if(this.scalar('SELECT id FROM users WHERE lower(email)=?',adminEmail))throw Object.assign(new Error('This email address is already connected to an account.'),{status:409});this.verifyEmailOtp(`${actor.userId}:company-admin:${adminEmail}`,'company-admin',adminEmail,adminEmailOtp)}const companyId=randomUUID(),at=this.now(),backupDir=runtime_path.join(this.dataRoot,companyId,'backups');this.validatePath(backupDir);const dataPath=runtime_path.join(this.dataRoot,companyId,'business.sqlite'),limits=body.roleLimits||{company_admin:2,accountant:3,salesperson:10,storekeeper:10,manager:10,custom:10},modules=body.modules||Object.fromEntries(scopes.map(s=>[s,true])),userLimit=Math.min(500,Math.max(1,Math.floor(Number(body.userLimit||15))));if(Number(body.userLimit||15)>500||Number(body.userLimit||15)<1)throw new Error('Maximum users must be between 1 and 500.');if(Number(limits.company_admin??2)<1)throw new Error('Allow at least one company administrator.');
    mkdirSync(runtime_path.dirname(dataPath),{recursive:true});mkdirSync(backupDir,{recursive:true});const company={id:companyId,name,profile:{...profile,name},dataPath,backupDir,role_limits:limits,modules,enabled:1,user_limit:userLimit};this.onCompanyCreate(company,{isInitial:false});
      this.txn(()=>{this.run('INSERT INTO companies VALUES(?,?,?,?,?,?,?,?,?,?,?)',companyId,name,JSON.stringify(company.profile),dataPath,backupDir,1,userLimit,JSON.stringify(limits),JSON.stringify(modules),at,at);if(!user){const salt=crypto_randomBytes(16).toString('hex'),recovery=inertRecovery();this.run('INSERT INTO users(id,username,display_name,password_salt,password_hash,recovery_salt,recovery_hash,active,is_super,created_at,updated_at,email,email_verified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',userId,adminUsername,String(admin.displayName||adminUsername),salt,access_control_scrypt(adminPassword,salt),recovery.salt,recovery.hash,1,0,at,at,adminEmail,1);this.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',`${actor.userId}:company-admin:${adminEmail}`,'company-admin')}this.run('INSERT INTO memberships VALUES(?,?,?,?,?,?,?)',companyId,userId,'company_admin',1,JSON.stringify(rolePermissions('company_admin')),at,at);this.auditRow(actor,companyId,'company.created',name);this.auditRow(actor,companyId,'company.admin_created',adminUsername)});return {body:{id:companyId,name,enabled:1,userLimit,roleLimits:limits,modules,administrator:{username:adminUsername,existingUser:!!user}}};
   }
   if(m==='PUT'&&p.startsWith('/api/admin/companies/')){
+   this.requireSuper(actor);
+   if(Object.keys(body).some(key=>!['enabled','userLimit','roleLimits','modules'].includes(key)))throw Object.assign(new Error('Platform controls manage access, allowances and features. Private company profiles must be edited by the company’s own administrator.'),{status:403});
+   platformAdmin?.guardCompanyEdit(p.split('/').pop());
    this.requireSuper(actor);const companyId=p.split('/').pop(),existing=this.scalar('SELECT * FROM companies WHERE id=?',companyId);if(!existing)throw new Error('Company not found.');const name=String(body.name||existing.name).trim(),profile=body.profile||JSON.parse(existing.profile_json),userLimit=body.userLimit===undefined?existing.user_limit:Math.floor(Number(body.userLimit)),roleLimits=body.roleLimits||JSON.parse(existing.role_limits_json),modules=body.modules||JSON.parse(existing.modules_json),enabled=body.enabled===undefined?existing.enabled:(body.enabled?1:0);
-   if(!name)throw new Error('Company name is required.');if(userLimit<1||userLimit>500||!Number.isFinite(userLimit))throw new Error('Maximum users must be between 1 and 500.');if(this.scalar('SELECT id FROM companies WHERE lower(name)=lower(?) AND id<>?',name,companyId))throw Object.assign(new Error('A business with that name already exists.'),{status:409});if(this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND active=1',companyId).n>userLimit)throw Object.assign(new Error('The new user limit is below this company’s active user count.'),{status:409});if(existing.enabled&&!enabled&&this.scalar('SELECT count(*) n FROM companies WHERE enabled=1').n<=1)throw new Error('Keep at least one active company so the software administrators can continue managing the system.');
-   this.run('UPDATE companies SET name=?,profile_json=?,user_limit=?,role_limits_json=?,modules_json=?,enabled=?,updated_at=? WHERE id=?',name,JSON.stringify({...profile,name}),userLimit,JSON.stringify(roleLimits),JSON.stringify(modules),enabled,this.now(),companyId);this.onCompanyUpdate({id:companyId,name,profile:{...profile,name}});this.auditRow(actor,companyId,enabled?'company.updated':'company.disabled');return {body:{success:true}};
+   if(!name)throw new Error('Company name is required.');if(userLimit<1||userLimit>500||!Number.isFinite(userLimit))throw new Error('Maximum users must be between 1 and 500.');if(this.scalar('SELECT id FROM companies WHERE lower(name)=lower(?) AND id<>?',name,companyId))throw Object.assign(new Error('A business with that name already exists.'),{status:409});if(this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND active=1',companyId).n>userLimit)throw Object.assign(new Error('The new user limit is below this company’s active user count.'),{status:409});if(!platformAdmin&&existing.enabled&&!enabled&&this.scalar('SELECT count(*) n FROM companies WHERE enabled=1').n<=1)throw new Error('Keep at least one active company so the software administrators can continue managing the system.');
+   this.run('UPDATE companies SET user_limit=?,role_limits_json=?,modules_json=?,enabled=?,updated_at=? WHERE id=?',userLimit,JSON.stringify(roleLimits),JSON.stringify(modules),enabled,this.now(),companyId);this.auditRow(actor,companyId,enabled?'company.updated':'company.disabled');return {body:{success:true}};
+  }
+  if(m==='GET'&&p==='/api/admin/roles'){
+   this.requireCompanyAdmin(actor,actor.activeCompanyId);
+   return {body:Object.fromEntries(['company_admin','accountant','salesperson','storekeeper','manager','custom'].map(role=>[role,rolePermissions(role)]))};
   }
   if(m==='GET'&&p==='/api/admin/users'){
     const companyId=String(url.searchParams.get('companyId')||actor.activeCompanyId||''),company=this.requireCompanyAdmin(actor,companyId);return {body:this.all(`SELECT u.id,u.username,u.display_name AS displayName,u.email,u.email_verified AS emailVerified,CASE WHEN u.active=1 AND m.active=1 THEN 1 ELSE 0 END AS active,m.role,m.permissions_json,m.created_at FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=? ORDER BY u.username`,companyId).map(u=>({...u,permissions:JSON.parse(u.permissions_json),permissions_json:undefined,created_at:undefined,companyId}))};
   }
   if(m==='POST'&&p==='/api/admin/users'){
+   this.requireCompanyAdmin(actor,String(body.companyId||actor.activeCompanyId||''));
+   if(adminUsername(body.username)===ADMIN_ACCESS_USERNAME||normalizeEmail(body.email)===ADMIN_ACCESS_EMAIL)throw Object.assign(new Error('Platform administrators cannot belong to company workspaces.'),{status:403});
+   if(this.scalar('SELECT id FROM users WHERE lower(username)=?',String(body.username||'').trim().toLowerCase()))throw Object.assign(new Error('Use a separate account for each company. This username is already registered.'),{status:409});
    const companyId=String(body.companyId||actor.activeCompanyId||''),company=this.requireCompanyAdmin(actor,companyId),role=String(body.role||'custom');if(!['company_admin','accountant','salesperson','storekeeper','manager','custom'].includes(role))throw new Error('Choose a supported user role.');
    const total=this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND active=1',companyId).n;if(total>=company.user_limit)throw Object.assign(new Error('This company has reached its user limit.'),{status:409});const roleLimits=JSON.parse(company.role_limits_json),used=this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND role=? AND active=1',companyId,role).n;if(used>=(roleLimits[role]??company.user_limit))throw Object.assign(new Error('This role has reached its user limit.'),{status:409});
     const username=String(body.username||'').trim().toLowerCase(),password=body.password,email=normalizeEmail(body.email);if(!/^[a-z0-9._-]{3,40}$/.test(username))throw new Error('Enter a valid username.');const existing=this.scalar('SELECT * FROM users WHERE username=?',username),userId=existing?.id||randomUUID();if(!existing&&!validPassword(password))throw new Error('A new user password must contain at least 12 characters.');if(existing&&this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=?',companyId,userId))throw Object.assign(new Error('This user already belongs to the selected company.'),{status:409});if(existing&&(!existing.email_verified||!validEmail(existing.email)))throw new Error('This account must verify its email before it can be added to a company.');if(!existing){if(!validEmail(email))throw new Error('Enter the new user’s email address.');if(this.scalar('SELECT id FROM users WHERE lower(email)=?',email))throw Object.assign(new Error('This email address is already connected to an account.'),{status:409});this.verifyEmailOtp(`admin-user:${actor.userId}:${companyId}:${email}`,'admin-user',email,String(body.emailOtp||''))}const salt=crypto_randomBytes(16).toString('hex'),recovery=inertRecovery(),at=this.now(),permissions=role==='custom'?body.permissions||emptyPermissions():{...rolePermissions(role),...(body.permissions||{})};
@@ -5071,24 +5158,35 @@ class AccessControl {
   }
   const userMatch=p.match(/^\/api\/admin\/users\/([^/]+)$/);
   if(userMatch&&m==='PUT'){
+   this.requireCompanyAdmin(actor,String(body.companyId||actor.activeCompanyId||''));
+   if(protectedAdmin(this.scalar('SELECT * FROM users WHERE id=?',userMatch[1])))throw Object.assign(new Error('Platform administrator credentials cannot be changed from a company account.'),{status:403});
+   if(this.scalar('SELECT 1 FROM memberships WHERE user_id=? AND company_id<>?',userMatch[1],String(body.companyId||actor.activeCompanyId||'')))throw Object.assign(new Error('This legacy shared account requires an account separation review before its credentials or permissions can be changed.'),{status:409});
    const userId=userMatch[1],companyId=String(body.companyId||actor.activeCompanyId||''),company=this.requireCompanyAdmin(actor,companyId),membership=this.scalar('SELECT m.*,u.username FROM memberships m JOIN users u ON u.id=m.user_id WHERE m.company_id=? AND m.user_id=?',companyId,userId);if(!membership)throw new Error('User not found.');if(body.resetPassword&&!validPassword(body.newPassword))throw new Error('The new password must contain at least 12 characters.');
    if(body.permissions){membership.permissions_json=JSON.stringify(body.permissions)}if(body.role){if(!['company_admin','accountant','salesperson','storekeeper','manager','custom'].includes(body.role))throw new Error('Choose a supported user role.');membership.role=String(body.role)}if(body.active!==undefined)membership.active=body.active?1:0;
    const roleLimits=JSON.parse(company.role_limits_json);if(membership.active){const total=this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND active=1 AND user_id<>?',companyId,userId).n;if(total>=company.user_limit)throw Object.assign(new Error('This company has reached its active user limit.'),{status:409});const used=this.scalar('SELECT count(*) n FROM memberships WHERE company_id=? AND active=1 AND role=? AND user_id<>?',companyId,membership.role,userId).n;if(used>=(roleLimits[membership.role]??company.user_limit))throw Object.assign(new Error('This role has reached its active user limit.'),{status:409});}
-   const remainingAdmins=this.scalar("SELECT count(*) n FROM memberships WHERE company_id=? AND role='company_admin' AND active=1 AND user_id<>?",companyId,userId).n;if(remainingAdmins+(membership.active&&membership.role==='company_admin'?1:0)<1)throw new Error('Keep at least one active company administrator.');this.run('UPDATE memberships SET role=?,active=?,permissions_json=?,updated_at=? WHERE company_id=? AND user_id=?',membership.role,membership.active,membership.permissions_json,this.now(),companyId,userId);if(body.resetPassword){const salt=crypto_randomBytes(16).toString('hex');this.run('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?',salt,access_control_scrypt(body.newPassword,salt),userId);this.run('DELETE FROM sessions WHERE user_id=?',userId)}this.auditRow(actor,companyId,'user.updated',membership.username);return {body:{success:true}};
+   const remainingAdmins=this.scalar("SELECT count(*) n FROM memberships WHERE company_id=? AND role='company_admin' AND active=1 AND user_id<>?",companyId,userId).n;if(remainingAdmins+(membership.active&&membership.role==='company_admin'?1:0)<1)throw new Error('Keep at least one active company administrator.');
+   const displayName=body.displayName===undefined?null:String(body.displayName).trim();if(displayName!==null&&(!displayName||displayName.length>120))throw new Error('Enter a full name of 1 to 120 characters.');
+   this.txn(()=>{this.run('UPDATE memberships SET role=?,active=?,permissions_json=?,updated_at=? WHERE company_id=? AND user_id=?',membership.role,membership.active,membership.permissions_json,this.now(),companyId,userId);if(displayName!==null)this.run('UPDATE users SET display_name=?,updated_at=? WHERE id=?',displayName,this.now(),userId);if(body.resetPassword){const salt=crypto_randomBytes(16).toString('hex');this.run('UPDATE users SET password_salt=?,password_hash=?,updated_at=? WHERE id=?',salt,access_control_scrypt(body.newPassword,salt),userId);this.run('DELETE FROM sessions WHERE user_id=?',userId)}this.auditRow(actor,companyId,'user.updated',membership.username)});return {body:{success:true}};
   }
   if(userMatch&&m==='DELETE'){
+   this.requireCompanyAdmin(actor,String(body.companyId||actor.activeCompanyId||''));
+   if(protectedAdmin(this.scalar('SELECT * FROM users WHERE id=?',userMatch[1])))throw Object.assign(new Error('The platform administrator cannot be removed from a company account.'),{status:403});
    const userId=userMatch[1],companyId=String(body.companyId||actor.activeCompanyId||''),company=this.requireCompanyAdmin(actor,companyId),membership=this.scalar('SELECT m.*,u.username FROM memberships m JOIN users u ON u.id=m.user_id WHERE company_id=? AND user_id=?',companyId,userId);if(!membership)throw new Error('User not found.');if(membership.role==='company_admin')throw new Error('Deactivate the administrator or promote another first.');this.txn(()=>{this.run('DELETE FROM memberships WHERE company_id=? AND user_id=?',companyId,userId);this.auditRow(actor,companyId,'user.removed',membership.username);if(!this.scalar('SELECT user_id FROM memberships WHERE user_id=? LIMIT 1',userId)){this.run('DELETE FROM sessions WHERE user_id=?',userId);this.run('DELETE FROM users WHERE id=?',userId)}});return {body:{success:true}};
   }
   if(m==='GET'&&p==='/api/admin/audit'){
+   if(actor.isSuper)return {body:this.all("SELECT username,company_name AS companyName,action,'' AS details,created_at AS date FROM audit WHERE action LIKE 'company.%' OR action IN ('auth.admin_login_otp','auth.admin_provisioned') ORDER BY created_at DESC LIMIT 1000")};
    if(!actor.isSuper&&!this.isAdmin(actor,actor.activeCompanyId))throw Object.assign(new Error('Administrator access is required.'),{status:403});const requested=url.searchParams.get('companyId')||actor.activeCompanyId||null;if(!actor.isSuper&&requested!==actor.activeCompanyId)throw Object.assign(new Error('You can only view your company activity.'),{status:403});return {body:this.all('SELECT username,company_name AS companyName,action,details,created_at AS date FROM audit WHERE (? IS NULL OR company_id=?) ORDER BY created_at DESC LIMIT 1000',requested,requested)};
   }
   return null;
  }
  can(actor,scope,action='view'){
-  if(actor?.isSuper)return true;const c=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',actor?.activeCompanyId||'');if(!c||JSON.parse(c.modules_json)[scope]===false)return false;const m=this.scalar('SELECT permissions_json FROM memberships WHERE company_id=? AND user_id=? AND active=1',c.id,actor.userId);return !!m&&JSON.parse(m.permissions_json)?.[scope]?.[action]===true;
+  if(!actor||actor.isSuper)return false;const c=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',actor.activeCompanyId||'');if(!c||this.primaryMembership(actor.userId)?.id!==c.id||JSON.parse(c.modules_json)[scope]===false)return false;const m=this.scalar('SELECT permissions_json FROM memberships WHERE company_id=? AND user_id=? AND active=1',c.id,actor.userId);return !!m&&JSON.parse(m.permissions_json)?.[scope]?.[action]===true;
  }
- requireCompanyAdmin(actor,companyId){const c=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',companyId);if(!c||(!actor.isSuper&&!this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1 AND role=\'company_admin\'',companyId,actor.userId)))throw Object.assign(new Error('Company administrator access is required.'),{status:403});return c}
- isAdmin(actor,companyId){return !!actor?.isSuper||!!this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1 AND role IN (\'company_admin\',\'manager\')',companyId,actor?.userId)}
+ requireCompanyAdmin(actor,companyId){const c=this.scalar('SELECT * FROM companies WHERE id=? AND enabled=1',companyId);if(!c||!actor||actor.isSuper||actor.activeCompanyId!==companyId||this.primaryMembership(actor.userId)?.id!==companyId||!this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1 AND role=\'company_admin\'',companyId,actor.userId))throw Object.assign(new Error('This action requires the administrator of this company.'),{status:403});return c}
+  // Company credentials never change tenant. Platform administration has
+  // account-management access only and cannot enter company workspaces.
+  canSwitchCompanies(actor){return false}
+  isAdmin(actor,companyId){return !!actor?.isSuper||!!this.scalar('SELECT 1 FROM memberships WHERE company_id=? AND user_id=? AND active=1 AND role IN (\'company_admin\',\'manager\')',companyId,actor?.userId)}
  requireSuper(actor){if(!actor.isSuper)throw Object.assign(new Error('Super administrator access is required.'),{status:403})}
  validatePath(dir,companyId=''){
   const invalid=message=>{throw Object.assign(new Error(message),{status:400})};
@@ -5162,11 +5260,11 @@ function addColumnIfMissing(table, column, definition) {
 }
 function migrateCompanyProfiles() {
   const stamp=now();
+  db.exec(`CREATE TABLE IF NOT EXISTS company_properties(id TEXT PRIMARY KEY,name TEXT NOT NULL,category TEXT NOT NULL DEFAULT 'Other',unit TEXT NOT NULL DEFAULT 'each',quantity REAL NOT NULL DEFAULT 1,purchase_cost REAL NOT NULL DEFAULT 0,purchase_date TEXT NOT NULL,condition TEXT NOT NULL DEFAULT 'Good',location TEXT NOT NULL DEFAULT '',serial_number TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_company_properties_name ON company_properties(name); CREATE TABLE IF NOT EXISTS resource_usage(id TEXT PRIMARY KEY,resource_id TEXT NOT NULL REFERENCES company_properties(id),project_key TEXT NOT NULL,usage_date TEXT NOT NULL,quantity REAL NOT NULL DEFAULT 1,notes TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE INDEX IF NOT EXISTS idx_resource_usage_resource_date ON resource_usage(resource_id,usage_date); CREATE INDEX IF NOT EXISTS idx_resource_usage_project ON resource_usage(project_key);`);
+  db.exec(`CREATE TABLE IF NOT EXISTS repair_intakes(id TEXT PRIMARY KEY,intake_number TEXT NOT NULL UNIQUE,request_id TEXT NOT NULL DEFAULT '',company_id TEXT NOT NULL REFERENCES companies(id),intake_type TEXT NOT NULL DEFAULT 'repair_goods',status TEXT NOT NULL DEFAULT 'received',source_document_type TEXT NOT NULL DEFAULT '',source_document_id TEXT NOT NULL DEFAULT '',customer_id TEXT REFERENCES customers(id),supplier_id TEXT REFERENCES suppliers(id),repair_agent_supplier_id TEXT REFERENCES suppliers(id),item_name TEXT NOT NULL,item_description TEXT NOT NULL DEFAULT '',serial_number TEXT NOT NULL DEFAULT '',fault_description TEXT NOT NULL,condition_on_receipt TEXT NOT NULL DEFAULT '',accessories TEXT NOT NULL DEFAULT '',received_at TEXT NOT NULL,received_by TEXT NOT NULL,received_contact TEXT NOT NULL DEFAULT '',location TEXT NOT NULL DEFAULT '',sent_for_repair_at TEXT NOT NULL DEFAULT '',sent_for_repair_by TEXT NOT NULL DEFAULT '',workflow_stages TEXT NOT NULL DEFAULT '["goods_received"]',inspection_notes TEXT NOT NULL DEFAULT '',repair_notes TEXT NOT NULL DEFAULT '',resolution TEXT NOT NULL DEFAULT '',notes TEXT NOT NULL DEFAULT '',created_by TEXT NOT NULL DEFAULT '',created_at TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE UNIQUE INDEX IF NOT EXISTS idx_repair_intake_request ON repair_intakes(request_id) WHERE request_id <> ''; CREATE INDEX IF NOT EXISTS idx_repair_intake_company ON repair_intakes(company_id,received_at); CREATE INDEX IF NOT EXISTS idx_repair_intake_source ON repair_intakes(source_document_type,source_document_id);`);
+  for(const [column,definition] of [['repair_agent_supplier_id','TEXT REFERENCES suppliers(id)'],['sent_for_repair_at',"TEXT NOT NULL DEFAULT ''"],['sent_for_repair_by',"TEXT NOT NULL DEFAULT ''"]])addColumnIfMissing('repair_intakes',column,definition);
   addColumnIfMissing('companies','document_color',"TEXT NOT NULL DEFAULT '#1f5fae'");
   addColumnIfMissing('companies','receiver_key',"TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('companies','location_url',"TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('services','next_service_date',"TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('services','reminder_days','INTEGER NOT NULL DEFAULT 7');
   run("INSERT OR IGNORE INTO settings(id,company_name,currency,locale,email,phone,address,tax_number,updated_at) VALUES (1,'Meridian Supply Co.','LKR','en-LK','','','','',?)",stamp);
   if(!one('SELECT id FROM companies LIMIT 1')){
     const legacy=one('SELECT * FROM settings WHERE id=1');
@@ -5178,13 +5276,14 @@ function migrateCompanyProfiles() {
     purchases:[['company_id','TEXT REFERENCES companies(id)'],['terms',"TEXT NOT NULL DEFAULT ''"]]
   }))for(const [column,definition] of columns)addColumnIfMissing(table,column,definition);
   addColumnIfMissing('products','description',"TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('products','photo_data',"TEXT NOT NULL DEFAULT ''");
-  addColumnIfMissing('products','photo_mime',"TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('invoices','project_key',"TEXT NOT NULL DEFAULT ''");
   addColumnIfMissing('quotations','project_key',"TEXT NOT NULL DEFAULT ''");
   for(const [column,definition] of [
     ['project_key',"TEXT NOT NULL DEFAULT ''"],['quotation_id','TEXT REFERENCES quotations(id)'],['invoice_id','TEXT REFERENCES invoices(id)'],['customer_id','TEXT REFERENCES customers(id)'],['supplier_id','TEXT REFERENCES suppliers(id)'],['project_name',"TEXT NOT NULL DEFAULT ''"],['expense_type',"TEXT NOT NULL DEFAULT 'general'"],['worker_count','REAL NOT NULL DEFAULT 0'],['worker_names',"TEXT NOT NULL DEFAULT ''"],['working_days','REAL NOT NULL DEFAULT 0'],['working_hours','REAL NOT NULL DEFAULT 0'],['labour_rate','REAL NOT NULL DEFAULT 0'],['labour_rate_unit',"TEXT NOT NULL DEFAULT 'day'"],['additional_labour','REAL NOT NULL DEFAULT 0']
   ])addColumnIfMissing('expenses',column,definition);
+  for(const [column,definition] of [
+    ['source_document_type',"TEXT NOT NULL DEFAULT 'invoice'"],['source_document_id',"TEXT NOT NULL DEFAULT ''"],['workflow_stages',`TEXT NOT NULL DEFAULT '["goods_received"]'`],['goods_received_at',"TEXT NOT NULL DEFAULT ''"],['goods_received_by',"TEXT NOT NULL DEFAULT ''"],['goods_received_contact',"TEXT NOT NULL DEFAULT ''"],['inspection_notes',"TEXT NOT NULL DEFAULT ''"],['repair_notes',"TEXT NOT NULL DEFAULT ''"]
+  ])addColumnIfMissing('warranty_claims',column,definition);
   for(const table of ['invoice_items','quotation_items'])for(const [column,definition] of [
     ['item_type',"TEXT NOT NULL DEFAULT 'product'"],['service_id','TEXT REFERENCES services(id)'],['item_code',"TEXT NOT NULL DEFAULT ''"],
     ['service_title',"TEXT NOT NULL DEFAULT ''"],['service_description',"TEXT NOT NULL DEFAULT ''"],['discount_percent','REAL NOT NULL DEFAULT 0'],['discount_amount','REAL NOT NULL DEFAULT 0']
@@ -5242,7 +5341,7 @@ function ensureProject(projectKey,title,customerId) {
 migrateCompanyProfiles();
 
 function workspaceHasSavedData() {
-  const populatedTables=['customers','suppliers','products','company_properties','services','invoices','invoice_items','payments','quotations','quotation_items','purchases','purchase_items','supplier_payments','expenses','expense_categories','expense_attachments','projects','stock_movements','partners','profit_shares'];
+  const populatedTables=['customers','suppliers','products','services','invoices','invoice_items','payments','quotations','quotation_items','purchases','purchase_items','supplier_payments','expenses','expense_categories','expense_attachments','projects','stock_movements','partners','profit_shares'];
   if(populatedTables.some(table=>Number(one(`SELECT COUNT(*) AS n FROM ${table}`).n)>0))return true;
   const profile=one("SELECT * FROM companies WHERE id='company-default'");
   if(one('SELECT COUNT(*) AS n FROM companies').n>1||profile&&(profile.name!=='Meridian Supply Co.'||profile.address||profile.logo_data||profile.bank_name||profile.bank_branch||profile.bank_account_number||profile.account_holder||profile.contact_numbers||profile.email||profile.website||profile.tax_number||profile.additional_info||profile.terms_conditions||profile.receiver_key))return true;
@@ -5369,32 +5468,21 @@ function writeAutomaticBackup(){
     throw new Error('Business data was saved, but the private account backup could not be updated. '+error.message);
   }
 }
-// Rebuilding a full account snapshot after every single row change makes large
-// companies progressively slower. Keep automatic snapshots to one scheduled
-// run every day at 12:00 AM Sri Lanka time. Explicit backup downloads and
-// restore operations still write immediately.
+// Rebuilding a full workbook after every single row change makes large
+// companies progressively slower. Keep the safety net, but coalesce bursts of
+// edits into one per-company backup. Explicit backup downloads and restore
+// operations still write immediately.
 const automaticBackupTimers=new Map();
-const AUTOMATIC_BACKUP_TIME_ZONE='Asia/Colombo';
-function colomboDateParts(date=new Date()){
-  const parts=new Intl.DateTimeFormat('en-US',{timeZone:AUTOMATIC_BACKUP_TIME_ZONE,year:'numeric',month:'numeric',day:'numeric',hour:'numeric',minute:'numeric',second:'numeric',hourCycle:'h23'}).formatToParts(date);
-  return Object.fromEntries(parts.filter(part=>part.type!=='literal').map(part=>[part.type,Number(part.value)]));
-}
-function nextMidnight(){
-  const now=Date.now(),local=colomboDateParts(new Date(now)),localDay=Date.UTC(local.year,local.month-1,local.day);
-  // Sri Lanka uses a fixed UTC+05:30 offset; convert the next local midnight to UTC.
-  return localDay+864e5-(5.5*60*60*1000);
-}
 function scheduleAutomaticBackup(){
   const tenant=currentTenant(),companyId=tenant?.company?.id;
   if(!companyId||automaticBackupTimers.has(companyId))return;
   const store=tenant;
-  const delay=Math.max(1000,nextMidnight()-Date.now());
   const timer=setTimeout(()=>{
     automaticBackupTimers.delete(companyId);
+    if(!accessControl.companyConfig(companyId))return;
     try{databaseContext.run(store,()=>writeAutomaticBackup());}
-    catch(error){console.error('The scheduled automatic account backup could not be updated:',error.message);}
-  },delay);
-  timer.unref?.();
+    catch(error){console.error('The debounced automatic account backup could not be updated:',error.message);}
+  },1000);
   automaticBackupTimers.set(companyId,timer);
 }
 function archiveCurrentBackup(){return writeAutomaticBackup()&&retainBackup(tenantBackupPath(),'before-restore');}
@@ -5411,15 +5499,18 @@ function backupStatus(){
 
 function restoreCompanySnapshot(archivePath){
   const escaped=String(archivePath).replaceAll("'","''");
-  db.exec(`ATTACH DATABASE '${escaped}' AS restore_source`);
-  let committed=false;
+  let attached=false,transactionStarted=false,committed=false;
   try{
+    db.exec(`ATTACH DATABASE '${escaped}' AS restore_source`);attached=true;
     const sourceTables=db.prepare("SELECT name FROM restore_source.sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name").all().map(row=>row.name);
     if(!sourceTables.length)throw new InputError('The account backup does not contain a company database.');
+    const expectedTenant=currentTenant()?.company?.id||'';
+    const sourceTenant=db.prepare("SELECT value FROM restore_source.app_metadata WHERE key='tenant_id' LIMIT 1").get()?.value||'';
+    if(!expectedTenant||sourceTenant!==expectedTenant)throw new InputError('This backup belongs to a different company account. No records were restored.');
     const currentTables=new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(row=>row.name));
     const tables=sourceTables.filter(name=>currentTables.has(name));
     if(!tables.includes('companies')||!tables.includes('settings'))throw new InputError('The account backup is incomplete or incompatible.');
-    db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');
+    db.exec('PRAGMA foreign_keys=OFF; BEGIN IMMEDIATE;');transactionStarted=true;
     for(const table of tables.slice().reverse())db.exec(`DELETE FROM "${table.replaceAll('"','""')}"`);
     for(const table of tables){
       const safe=table.replaceAll('"','""');
@@ -5428,16 +5519,21 @@ function restoreCompanySnapshot(archivePath){
       const list=columns.map(column=>`"${String(column).replaceAll('"','""')}"`).join(',');
       db.exec(`INSERT INTO "${safe}" (${list}) SELECT ${list} FROM restore_source."${safe}"`);
     }
-    db.exec('COMMIT; PRAGMA foreign_keys=ON;');committed=true;
-  }catch(error){try{db.exec('ROLLBACK; PRAGMA foreign_keys=ON;');}catch{}throw error}
-  finally{try{db.exec('DETACH DATABASE restore_source');}catch{} }
+    db.exec('COMMIT; PRAGMA foreign_keys=ON;');transactionStarted=false;committed=true;
+  }catch(error){
+    if(transactionStarted)try{db.exec('ROLLBACK;');}catch{}
+    try{db.exec('PRAGMA foreign_keys=ON;');}catch{}
+    if(error instanceof InputError)throw error;
+    throw new InputError('The account backup is invalid, unreadable, or incompatible.');
+  }finally{if(attached)try{db.exec('DETACH DATABASE restore_source');}catch{} }
   if(!committed)throw new InputError('The account backup could not be restored.');
+  platformAdmin?.invalidateUsage(currentTenant()?.company?.id);
   migrateCompanyProfiles();
   return {success:true,restoredAt:now(),backup:backupStatus()};
 }
 
 function bootstrap() {
-  const tables = ['settings','companies','customers','suppliers','products','company_properties','services','invoices','invoice_items','payments','quotations','quotation_items','purchases','purchase_items','supplier_payments','expenses','expense_categories','projects','stock_movements','partners','profit_shares'];
+  const tables = ['settings','companies','customers','suppliers','products','company_properties','resource_usage','services','invoices','invoice_items','payments','quotations','quotation_items','purchases','purchase_items','supplier_payments','expenses','expense_categories','projects','stock_movements','partners','profit_shares','warranty_claims','warranty_claim_events','repair_intakes'];
   return {...Object.fromEntries(tables.map(table => [table, q(`SELECT * FROM ${table}`)])),expense_attachments:q('SELECT id,expense_id,file_name,mime_type,size_bytes,created_at FROM expense_attachments'),expense_allocations:expenseAllocationRows(),expense_invoices:expenseInvoiceRows(),project_profit_settings:q('SELECT project_key FROM projects').map(project=>({project_key:project.project_key,company_share_percent:projectCompanyShare(project.project_key)}))};
 }
 function companyExists(companyId) {
@@ -5457,7 +5553,8 @@ function documentTotals(lines,data) {
   const taxAmount=Math.round((subtotal-discountAmount)*taxRate)/100;
   return {subtotal,discountPercent,discountAmount,taxRate,taxAmount,total:Math.round((subtotal-discountAmount+taxAmount)*100)/100};
 }
-function companyFields(data) {
+const MAX_UPLOAD_IMAGE_BYTES=500*1024;
+function companyFields(data,existingLogo='') {
   const name=required(data.name,'Company name');
   let logo=String(data.logoData||'');
   if(logo&&!/^data:image\/(?:png|jpeg|webp|svg\+xml);base64,[A-Za-z0-9+/=\r\n]+$/.test(logo))throw new InputError('Upload a PNG, JPG, WebP or SVG logo.');
@@ -5466,6 +5563,7 @@ function companyFields(data) {
     const [,format,encoded]=logo.match(/^data:image\/(png|jpeg|webp|svg\+xml);base64,([A-Za-z0-9+/=\r\n]+)$/)||[];
     const image=server_Buffer.from(encoded.replace(/\s/g,''),'base64');
     if(!image.length)throw new InputError('The uploaded company logo is empty or invalid.');
+    if(logo!==existingLogo&&image.length>MAX_UPLOAD_IMAGE_BYTES)throw new InputError('Company logos and uploaded images must be 500 KB or smaller.');
     if(format==='svg+xml'){
     const svg=image.toString('utf8');
     if(!/<svg\b/i.test(svg)||/<\s*(?:script|foreignObject|iframe|object|embed)\b|<!DOCTYPE|<!ENTITY|@import|\bon[a-z]+\s*=|(?:href|src)\s*=\s*["']\s*(?!#)|url\s*\(\s*["']?\s*(?!#)/i.test(svg))throw new InputError('This SVG contains active or external content. Save it as a clean logo SVG and try again.');
@@ -5482,20 +5580,18 @@ function companyFields(data) {
   if(!/^#[0-9a-fA-F]{6}$/.test(color))throw new InputError('Invoice color must be a valid six-digit hexadecimal color.');
   const receiverKey=String(data.receiverKey??data.receiver_key??'');
   if(receiverKey.length>256)throw new InputError('Receiver Key must be 256 characters or fewer.');
-  const locationUrl=String(data.locationUrl??data.location_url??'').trim();
-  if(locationUrl && !/^https:\/\/(?:maps\.google\.com|www\.google\.com\/maps)(?:[/?#]|$)/i.test(locationUrl))throw new InputError('Google Maps location must be a secure Google Maps link.');
   return {
     name,address:String(data.address||''),logo_data:logo,bank_name:String(data.bankName||''),bank_branch:String(data.bankBranch||''),
     bank_account_number:String(data.bankAccountNumber||''),account_holder:String(data.accountHolder||''),contact_numbers:String(data.contactNumbers||''),
-    email:String(data.email||''),website:String(data.website||''),location_url:locationUrl,tax_number:String(data.taxNumber||''),additional_info:String(data.additionalInfo||''),
+    email:String(data.email||''),website:String(data.website||''),tax_number:String(data.taxNumber||''),additional_info:String(data.additionalInfo||''),
     terms_conditions:String(data.termsConditions||''),document_color:color.toLowerCase(),receiver_key:receiverKey
   };
 }
 function saveCompany(data,companyId=null) {
-  const f=companyFields(data),stamp=now();
+  const existing=companyId?one('SELECT logo_data FROM companies WHERE id=?',companyId):null,f=companyFields(data,existing?.logo_data||''),stamp=now();
   if(companyId){if(!one('SELECT id FROM companies WHERE id=?',companyId))throw new InputError('Company profile not found.');
-    run('UPDATE companies SET name=?,address=?,logo_data=?,bank_name=?,bank_branch=?,bank_account_number=?,account_holder=?,contact_numbers=?,email=?,website=?,location_url=?,tax_number=?,additional_info=?,terms_conditions=?,document_color=?,receiver_key=?,updated_at=? WHERE id=?',f.name,f.address,f.logo_data,f.bank_name,f.bank_branch,f.bank_account_number,f.account_holder,f.contact_numbers,f.email,f.website,f.location_url,f.tax_number,f.additional_info,f.terms_conditions,f.document_color,f.receiver_key,stamp,companyId);
-  }else{companyId=id();run('INSERT INTO companies(id,name,address,logo_data,bank_name,bank_branch,bank_account_number,account_holder,contact_numbers,email,website,location_url,tax_number,additional_info,terms_conditions,document_color,receiver_key,is_default,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)',companyId,f.name,f.address,f.logo_data,f.bank_name,f.bank_branch,f.bank_account_number,f.account_holder,f.contact_numbers,f.email,f.website,f.location_url,f.tax_number,f.additional_info,f.terms_conditions,f.document_color,f.receiver_key,stamp,stamp);}
+    run('UPDATE companies SET name=?,address=?,logo_data=?,bank_name=?,bank_branch=?,bank_account_number=?,account_holder=?,contact_numbers=?,email=?,website=?,tax_number=?,additional_info=?,terms_conditions=?,document_color=?,receiver_key=?,updated_at=? WHERE id=?',f.name,f.address,f.logo_data,f.bank_name,f.bank_branch,f.bank_account_number,f.account_holder,f.contact_numbers,f.email,f.website,f.tax_number,f.additional_info,f.terms_conditions,f.document_color,f.receiver_key,stamp,companyId);
+  }else{companyId=id();run('INSERT INTO companies(id,name,address,logo_data,bank_name,bank_branch,bank_account_number,account_holder,contact_numbers,email,website,tax_number,additional_info,terms_conditions,document_color,receiver_key,is_default,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)',companyId,f.name,f.address,f.logo_data,f.bank_name,f.bank_branch,f.bank_account_number,f.account_holder,f.contact_numbers,f.email,f.website,f.tax_number,f.additional_info,f.terms_conditions,f.document_color,f.receiver_key,stamp,stamp);}
   return one('SELECT * FROM companies WHERE id=?',companyId);
 }
 function setDefaultCompany(companyId) {
@@ -5627,6 +5723,15 @@ function saveQuote(data, quotationId = null) {
   return one('SELECT * FROM quotations WHERE id=?',quotationId);
 }
 
+function generatedProductSku(name, excludedId = '') {
+  const base=String(name||'').normalize('NFKD').replace(/[\u0300-\u036f]/g,'').toUpperCase().replace(/[^A-Z0-9]+/g,'-').replace(/^-+|-+$/g,'').slice(0,24)||'PRODUCT';
+  if(!one('SELECT id FROM products WHERE lower(sku)=lower(?) AND id<>? LIMIT 1',base,excludedId||''))return base;
+  for(let suffix=2;suffix<10000;suffix++){
+    const candidate=`${base}-${String(suffix).padStart(3,'0')}`;
+    if(!one('SELECT id FROM products WHERE lower(sku)=lower(?) AND id<>? LIMIT 1',candidate,excludedId||''))return candidate;
+  }
+  return `${base}-${Date.now().toString(36).toUpperCase()}`;
+}
 function updateCatalog(table, data, itemId = null) {
   const stamp=now();
   if (table==='customers'||table==='suppliers') {
@@ -5640,39 +5745,38 @@ function updateCatalog(table, data, itemId = null) {
     return one(`SELECT * FROM ${table} WHERE id=?`,newId);
   }
   if (table==='products') {
-    const sku=required(data.sku,'SKU'),name=required(data.name,'Product name'),category=String(data.category||'General'),unit=String(data.unit||'each'),reorder=amount(data.reorderLevel??5,'Reorder level'),cost=amount(data.purchasePrice??0,'Purchase price'),price=amount(data.sellingPrice??0,'Selling price');
+    const previous=itemId?one('SELECT * FROM products WHERE id=?',itemId):null;
+    if(itemId&&!previous)throw new InputError('Product not found.');
+    const name=required(data.name,'Product name'),requestedSku=String(data.sku??'').trim(),sku=requestedSku||String(previous?.sku||'').trim()||generatedProductSku(name,itemId||''),category=String(data.category||'General'),unit=String(data.unit||'each'),reorder=amount(data.reorderLevel??5,'Reorder level'),cost=amount(data.purchasePrice??0,'Purchase price'),price=amount(data.sellingPrice??0,'Selling price');
+    const duplicate=one('SELECT id FROM products WHERE lower(sku)=lower(?) AND id<>? LIMIT 1',sku,itemId||'');
+    if(duplicate)throw new InputError(`SKU "${sku}" is already in use.`);
     const description=String(data.description||'');
-    const photoData=String(data.photoData||'');
-    const photoMime=String(data.photoMime||'').toLowerCase();
-    if(photoData && !/^data:(image\/(?:jpeg|png|webp));base64,[A-Za-z0-9+/=\r\n]+$/.test(photoData)) throw new InputError('Product photo must be a PNG, JPG or WebP image.');
-    if(photoData.length>2100000) throw new InputError('Product photo must be 1.5 MB or smaller.');
-    if(photoData && !photoMime) throw new InputError('Product photo type is missing. Please choose the image again.');
     if (itemId) {
-      const previous=one('SELECT * FROM products WHERE id=?',itemId); if (!previous) throw new InputError('Product not found.');
-      const nextPhoto=data.photoData===undefined?String(previous.photo_data||''):photoData;
-      const nextMime=data.photoData===undefined?String(previous.photo_mime||''):photoMime;
-      run('UPDATE products SET sku=?,name=?,category=?,unit=?,reorder_level=?,purchase_price=?,selling_price=?,description=?,photo_data=?,photo_mime=?,updated_at=? WHERE id=?',sku,name,category,unit,reorder,cost,price,description,nextPhoto,nextMime,stamp,itemId);
+      run('UPDATE products SET sku=?,name=?,category=?,unit=?,reorder_level=?,purchase_price=?,selling_price=?,description=?,updated_at=? WHERE id=?',sku,name,category,unit,reorder,cost,price,description,stamp,itemId);
       if (data.quantity !== undefined && Number(data.quantity)!==previous.quantity) adjustStock(itemId,Number(data.quantity)-previous.quantity,'Stock correction','Product edit',today());
       return one('SELECT * FROM products WHERE id=?',itemId);
     }
     const initial=amount(data.quantity??0,'Opening stock'); const newId=id();
-    run('INSERT INTO products(id,sku,name,category,unit,quantity,reorder_level,purchase_price,selling_price,description,photo_data,photo_mime,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)',newId,sku,name,category,unit,initial,reorder,cost,price,description,photoData,photoMime,stamp,stamp);
+    run('INSERT INTO products(id,sku,name,category,unit,quantity,reorder_level,purchase_price,selling_price,description,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)',newId,sku,name,category,unit,initial,reorder,cost,price,description,stamp,stamp);
     if (initial>0) run('INSERT INTO stock_movements VALUES (?,?,?,?,?,?,?,?,?)',id(),newId,'Opening stock',initial,cost,'','Opening balance',today(),stamp);
     return one('SELECT * FROM products WHERE id=?',newId);
   }
   if (table==='company_properties') {
+    const existing=itemId?one('SELECT * FROM company_properties WHERE id=?',itemId):null;
+    const propertyActor=typeof currentTenant==='function'?currentTenant()?.actor:null;
+    if(propertyActor&&!accessControl.can(propertyActor,'profit','view'))data={...data,purchaseCost:existing?.purchase_cost??0};
     const name=required(data.name,'Property name'),category=String(data.category||'Other').trim()||'Other',unit=String(data.unit||'each').trim()||'each';
-    const qty=amount(data.quantity??1,'Quantity'),cost=amount(data.purchaseCost??0,'Purchase cost'),purchaseDate=String(data.purchaseDate||today()).trim(),condition=String(data.condition||'Good').trim()||'Good',location=String(data.location||''),serialNumber=String(data.serialNumber||''),notes=String(data.notes||'');
+    const qty=amount(data.quantity??existing?.quantity??1,'Quantity'),cost=amount(data.purchaseCost??existing?.purchase_cost??0,'Purchase cost'),purchaseDate=String(data.purchaseDate||existing?.purchase_date||today()).trim(),condition=String(data.condition||existing?.condition||'Good').trim()||'Good',location=String(data.location??existing?.location??''),serialNumber=String(data.serialNumber??existing?.serial_number??''),notes=String(data.notes??existing?.notes??'');
     if(!['New','Good','Fair','Needs repair','Retired'].includes(condition))throw new InputError('Choose a valid property condition.');
-    if(itemId){if(!one('SELECT id FROM company_properties WHERE id=?',itemId))throw new InputError('Property not found.');run('UPDATE company_properties SET name=?,category=?,unit=?,quantity=?,purchase_cost=?,purchase_date=?,condition=?,location=?,serial_number=?,notes=?,updated_at=? WHERE id=?',name,category,unit,qty,cost,purchaseDate,condition,location,serialNumber,notes,stamp,itemId);return one('SELECT * FROM company_properties WHERE id=?',itemId);}
+    if(!/^\d{4}-\d{2}-\d{2}$/.test(purchaseDate)||!Number.isFinite(Date.parse(purchaseDate))||new Date(purchaseDate+'T00:00:00Z').toISOString().slice(0,10)!==purchaseDate)throw new InputError('Enter a valid purchase date.');
+    if(serialNumber&&one('SELECT id FROM company_properties WHERE lower(name)=lower(?) AND serial_number=? AND id<>? LIMIT 1',name,serialNumber,itemId||''))throw new InputError('A resource with this name and serial number already exists.');
+    if(itemId){if(!existing)throw new InputError('Property not found.');run('UPDATE company_properties SET name=?,category=?,unit=?,quantity=?,purchase_cost=?,purchase_date=?,condition=?,location=?,serial_number=?,notes=?,updated_at=? WHERE id=?',name,category,unit,qty,cost,purchaseDate,condition,location,serialNumber,notes,stamp,itemId);return one('SELECT * FROM company_properties WHERE id=?',itemId);}
     const newId=id();run('INSERT INTO company_properties(id,name,category,unit,quantity,purchase_cost,purchase_date,condition,location,serial_number,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)',newId,name,category,unit,qty,cost,purchaseDate,condition,location,serialNumber,notes,stamp,stamp);return one('SELECT * FROM company_properties WHERE id=?',newId);
   }
   if(table==='services'){
-    const title=required(data.title,'Service title'),code=String(data.code||''),description=String(data.description||''),price=amount(data.unitPrice??0,'Service charge'),cost=amount(data.unitCost??0,'Service cost'),nextServiceDate=String(data.nextServiceDate||'').trim(),reminderDays=Math.floor(Number(data.reminderDays??7));
-    if(nextServiceDate && !/^\d{4}-\d{2}-\d{2}$/.test(nextServiceDate))throw new InputError('Next service date must use the calendar date format.');
-    if(!Number.isInteger(reminderDays)||reminderDays<0||reminderDays>365)throw new InputError('Reminder days must be between 0 and 365.');
-    if(itemId){if(!one('SELECT id FROM services WHERE id=?',itemId))throw new InputError('Service not found.');run('UPDATE services SET code=?,title=?,description=?,unit_price=?,unit_cost=?,next_service_date=?,reminder_days=?,updated_at=? WHERE id=?',code,title,description,price,cost,nextServiceDate,reminderDays,stamp,itemId);return one('SELECT * FROM services WHERE id=?',itemId);}
-    const newId=id();run('INSERT INTO services(id,code,title,description,unit_price,unit_cost,next_service_date,reminder_days,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)',newId,code,title,description,price,cost,nextServiceDate,reminderDays,stamp,stamp);return one('SELECT * FROM services WHERE id=?',newId);
+    const title=required(data.title,'Service title'),code=String(data.code||''),description=String(data.description||''),price=amount(data.unitPrice??0,'Service charge'),cost=amount(data.unitCost??0,'Service cost');
+    if(itemId){if(!one('SELECT id FROM services WHERE id=?',itemId))throw new InputError('Service not found.');run('UPDATE services SET code=?,title=?,description=?,unit_price=?,unit_cost=?,updated_at=? WHERE id=?',code,title,description,price,cost,stamp,itemId);return one('SELECT * FROM services WHERE id=?',itemId);}
+    const newId=id();run('INSERT INTO services(id,code,title,description,unit_price,unit_cost,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',newId,code,title,description,price,cost,stamp,stamp);return one('SELECT * FROM services WHERE id=?',newId);
   }
 }
 
@@ -5692,11 +5796,18 @@ function saveExpenseAttachments(expenseId,attachments=[]){
     if(!allowed[mime]?.includes(ext))throw new InputError('Expense documents must be PDF, JPG, JPEG or PNG files.');
     const data=String(file.data||'').match(/^data:([^;,]+);base64,([A-Za-z0-9+/=]+)$/);
     if(!data||data[1].toLowerCase()!==mime)throw new InputError(`The file ${name} could not be read.`);
-    const buffer=server_Buffer.from(data[2],'base64');if(!buffer.length||buffer.length>6*1024*1024)throw new InputError('Each expense document must be 6 MB or smaller.');
+    const buffer=server_Buffer.from(data[2],'base64');if(!buffer.length||buffer.length>6*1024*1024)throw new InputError('Each expense document must be 6 MB or smaller.');if(mime.startsWith('image/')&&buffer.length>MAX_UPLOAD_IMAGE_BYTES)throw new InputError('Each uploaded image must be 500 KB or smaller.');
     const valid=mime==='application/pdf'?buffer.subarray(0,5).toString()==='%PDF-':mime==='image/png'?buffer.subarray(0,8).equals(server_Buffer.from([137,80,78,71,13,10,26,10])):buffer.subarray(0,3).equals(server_Buffer.from([255,216,255]));
     if(!valid)throw new InputError(`${name} does not appear to be a valid ${ext.toUpperCase()} file.`);
     run('INSERT INTO expense_attachments(id,expense_id,file_name,mime_type,size_bytes,file_data,created_at) VALUES (?,?,?,?,?,?,?)',id(),expenseId,name,mime,buffer.length,buffer,now());
   }
+}
+function deleteExpenseAttachment(attachmentId){
+  const attachment=one('SELECT id,expense_id FROM expense_attachments WHERE id=?',String(attachmentId||''));
+  if(!attachment)throw Object.assign(new Error('Expense bill or receipt was not found.'),{status:404});
+  if(!one('SELECT id FROM expenses WHERE id=?',attachment.expense_id))throw Object.assign(new Error('The expense for this file no longer exists.'),{status:404});
+  run('DELETE FROM expense_attachments WHERE id=?',attachment.id);
+  return {success:true,id:attachment.id};
 }
 const EXPENSE_ALLOCATION_PREFIX='expense-allocations:';
 const PROJECT_COMPANY_SHARE_PREFIX='project-company-share:';
@@ -5771,9 +5882,7 @@ function normalizeExpenseInvoices(data){
     const invoiceId=String(value||'').trim();
     if(!invoiceId)continue;
     if(seen.has(invoiceId))throw new InputError('Each invoice can appear only once on an expense.');
-     const invoice=one('SELECT id,status FROM invoices WHERE id=?',invoiceId);
-     if(!invoice)throw new InputError('Select valid invoices.');
-     if(!['paid','overpaid'].includes(String(invoice.status||'')))throw new InputError('Only paid or overpaid invoices can be linked to an expense.');
+    if(!one('SELECT id FROM invoices WHERE id=?',invoiceId))throw new InputError('Select valid invoices.');
     seen.add(invoiceId);invoiceIds.push(invoiceId);
   }
   return invoiceIds;
@@ -5793,6 +5902,7 @@ function setProjectCompanyShare(projectKey,value){
   const percentage=amount(value,'Company share percentage');
   if(percentage>100)throw new InputError('Company share percentage cannot exceed 100.');
   run('INSERT OR REPLACE INTO app_metadata(key,value) VALUES (?,?)',PROJECT_COMPANY_SHARE_PREFIX+projectKey,String(percentage));
+  const lossLedger=lcRead();if(lossLedger.charges[projectKey]){lossLedger.charges[projectKey]={mode:'percentage',value:percentage};lcReconcile(lossLedger);lcSave(lossLedger);}
   return {projectKey,companySharePercent:percentage};
 }
 function expenseTouchesProject(expense,projectKey){return storedExpenseAllocations(expense).some(item=>item.project_key===projectKey);}
@@ -5805,10 +5915,10 @@ function createExpense(data, expenseId=null) {
   if(!customerId&&invoiceIds.length===1)customerId=firstInvoice.customer_id;
   if(customerId&&!one('SELECT id FROM customers WHERE id=?',customerId))throw new InputError('Select a valid customer.');
   const supplierId=String(data.supplierId||'')||null;if(supplierId&&!one('SELECT id FROM suppliers WHERE id=?',supplierId))throw new InputError('Select a valid supplier.');
-  const workers=amount(data.workerCount??0,'Worker count'),days=amount(data.workingDays??0,'Working days'),hours=amount(data.workingHours??0,'Working hours'),rate=amount(data.labourRate??0,'Labour rate'),additional=amount(data.additionalLabour??0,'Additional labour cost'),rateUnit=String(data.labourRateUnit||'day');
+  const workers=amount(data.workerCount??0,'Resource quantity'),days=amount(data.workingDays??0,'Working days'),hours=amount(data.workingHours??0,'Working hours'),rate=amount(data.labourRate??0,'Resource rate'),additional=amount(data.additionalLabour??0,'Additional resource cost'),manual=amount(data.resourceTotal??data.amount??0,'Resource total'),rateUnit=String(data.labourRateUnit||'day');
   if(!['day','hour'].includes(rateUnit))throw new InputError('Choose a valid labour rate unit.');
   const calculated=expenseType==='labour'?Math.round(((rateUnit==='hour'?workers*hours:workers*days)*rate+additional)*100)/100:0;
-  const value=expenseType==='labour'?amount(calculated,'Labour total',{zero:false}):amount(data.amount,'Amount',{zero:false});
+  const value=expenseType==='labour'?amount(calculated||manual,'Resource total',{zero:false}):amount(data.amount,'Amount',{zero:false});
   const date=data.expenseDate||today(),stamp=now(),method=String(data.paymentMethod||'Cash'),notes=String(data.notes||'');let targetId=expenseId;
   if(expenseId){const previous=one('SELECT * FROM expenses WHERE id=?',expenseId);if(!previous)throw new InputError('Expense not found.');
     run('UPDATE expenses SET description=?,category=?,amount=?,expense_date=?,payment_method=?,notes=?,updated_at=?,project_key=?,quotation_id=?,invoice_id=?,customer_id=?,supplier_id=?,project_name=?,expense_type=?,worker_count=?,worker_names=?,working_days=?,working_hours=?,labour_rate=?,labour_rate_unit=?,additional_labour=? WHERE id=?',description,category,value,date,method,notes,stamp,'',null,invoiceIds.length===1?invoiceIds[0]:null,customerId,supplierId,'',expenseType,workers,String(data.workerNames||''),days,hours,rate,rateUnit,additional,expenseId);
@@ -5835,33 +5945,50 @@ function createPayment(data, supplier=false) {
   const paymentId=id(); run('INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)',paymentId,invoiceId,invoice.customer_id,value,method,reference,date,notes,stamp); refreshInvoice(invoiceId); return one('SELECT * FROM payments WHERE id=?',paymentId);
 }
 
+function profitPurchaseUnitCost(productId,invoiceDate=''){
+  const rows=q('SELECT pi.quantity,pi.unit_cost,p.purchase_date FROM purchase_items pi JOIN purchases p ON p.id=pi.purchase_id WHERE pi.product_id=?',productId);let quantity=0,value=0;
+  for(const row of rows){if(invoiceDate&&row.purchase_date&&String(row.purchase_date).slice(0,10)>String(invoiceDate).slice(0,10))continue;const qty=Number(row.quantity)||0,unit=Number(row.unit_cost);if(qty>0&&Number.isFinite(unit)&&unit>0){quantity+=qty;value+=qty*unit;}}
+  if(quantity>0)return {unitCost:value/quantity,source:'Purchase history'};
+  const row=one('SELECT purchase_price FROM products WHERE id=?',productId),cost=Number(row?.purchase_price);return Number.isFinite(cost)&&cost>0?{unitCost:cost,source:'Product purchase cost'}:null;
+}
+function profitInvoiceLineCost(line,invoice){
+  const stored=Number(line.unit_cost),selling=Number(line.unit_price)||0,isService=line.item_type==='service';
+  const fallback=isService?(()=>{const row=one('SELECT unit_cost FROM services WHERE id=?',line.service_id),cost=Number(row?.unit_cost);return Number.isFinite(cost)&&cost>0?{unitCost:cost,source:'Service delivery cost'}:null;})():profitPurchaseUnitCost(line.product_id,invoice?.invoice_date);
+  const valid=Number.isFinite(stored)&&stored>0,sameAsSelling=valid&&selling>0&&Math.abs(stored-selling)<0.005;
+  if(valid&&!sameAsSelling)return {unitCost:stored,known:true};
+  if(fallback)return {unitCost:fallback.unitCost,known:true};
+  return {unitCost:0,known:false};
+}
+function profitInvoiceStats(invoice){
+  const lines=q('SELECT * FROM invoice_items WHERE invoice_id=?',invoice.id),lineDiscounts=lines.reduce((sum,line)=>sum+Number(line.discount_amount||0),0),documentDiscount=Math.max(0,Number(invoice.discount_amount||0)-lineDiscounts),lineNetTotal=lines.reduce((sum,line)=>sum+Number(line.line_total||0)-Number(line.discount_amount||0),0);
+  let sales=0,directCost=0,missing=0;
+  for(const line of lines){const lineNet=Math.max(0,Number(line.line_total||0)-Number(line.discount_amount||0)),share=lineNetTotal>0?documentDiscount*lineNet/lineNetTotal:(lines.length?documentDiscount/lines.length:0),lineSales=Math.max(0,lineNet-share),cost=profitInvoiceLineCost(line,invoice);sales+=lineSales;if(cost.known)directCost+=(Number(line.quantity)||0)*cost.unitCost;else missing++;}
+  return {sales,directCost,missing};
+}
 function createProfitShares(data) {
   const start=required(data.periodStart,'Period start'),end=required(data.periodEnd,'Period end'); if (end<start) throw new InputError('Period end must be on or after period start.');
   const partners=q('SELECT * FROM partners'); if (!partners.length) throw new InputError('Add a partner before calculating profit shares.');
   const allocated=partners.reduce((sum,p)=>sum+Number(p.share_percent),0);if(allocated>100)throw new InputError(`Partner percentages add up to ${allocated}%. Reduce them to 100% or less before calculating shares.`);
-  const basis=one(`SELECT
-    COALESCE((SELECT SUM(subtotal-discount_amount) FROM invoices WHERE invoice_date BETWEEN ? AND ?),0)-
-    COALESCE((SELECT SUM(ii.quantity*ii.unit_cost) FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE i.invoice_date BETWEEN ? AND ?),0)-
-    COALESCE((SELECT SUM(amount) FROM expenses WHERE expense_date BETWEEN ? AND ?),0) AS profit`,start,end,start,end,start,end).profit;
-  const invoices=q('SELECT * FROM invoices WHERE invoice_date BETWEEN ? AND ?',start,end),invoiceCosts=new Map(q('SELECT i.project_key,SUM(ii.quantity*ii.unit_cost) AS cost FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE i.invoice_date BETWEEN ? AND ? GROUP BY i.project_key',start,end).map(row=>[row.project_key,Number(row.cost)||0])),projectProfit=new Map();
-  for(const invoice of invoices)projectProfit.set(invoice.project_key,(projectProfit.get(invoice.project_key)||0)+Number(invoice.subtotal||invoice.total)-Number(invoice.discount_amount||0));
-  for(const [key,cost] of invoiceCosts)projectProfit.set(key,(projectProfit.get(key)||0)-cost);
-  for(const expense of q('SELECT * FROM expenses WHERE expense_date BETWEEN ? AND ?',start,end))for(const allocation of storedExpenseAllocations(expense))projectProfit.set(allocation.project_key,(projectProfit.get(allocation.project_key)||0)-allocation.amount);
-  let companyRetained=0;for(const [key,profit] of projectProfit)companyRetained+=Math.max(0,profit)*projectCompanyShare(key)/100;
-  companyRetained=Math.round(companyRetained*100)/100;const distributable=Math.max(0,Math.round((Number(basis)-companyRetained)*100)/100);
+  const invoices=q('SELECT * FROM invoices WHERE invoice_date BETWEEN ? AND ?',start,end),projectProfit=new Map();let revenue=0,directCost=0;
+  for(const invoice of invoices){const stats=profitInvoiceStats(invoice);revenue+=stats.sales;directCost+=stats.directCost;const key=invoice.project_key||'';projectProfit.set(key,(projectProfit.get(key)||0)+stats.sales-stats.directCost);}
+  const expenses=q('SELECT * FROM expenses WHERE expense_date BETWEEN ? AND ?',start,end);for(const expense of expenses)for(const allocation of storedExpenseAllocations(expense))projectProfit.set(allocation.project_key,(projectProfit.get(allocation.project_key)||0)-Number(allocation.amount||0));
+  const basis=revenue-directCost-expenses.reduce((sum,expense)=>sum+Number(expense.amount||0),0);
+  const lossLedger=lcRead(),lossView=lcView(lossLedger);let companyRetained=0;for(const [key,profit] of projectProfit){const config=lossLedger.charges[key]||{mode:'percentage',value:projectCompanyShare(key)};companyRetained+=Math.min(Math.max(0,profit),config.mode==='fixed'?Number(config.value):Math.max(0,profit)*Number(config.value)/100);}
+  const distributionRecovery=lossView.recoveries.filter(row=>row.source==='distributable'&&!row.reversedAt&&row.createdAt.slice(0,10)>=start&&row.createdAt.slice(0,10)<=end&&lcValid(lossLedger.confirmations.find(item=>item.id===row.confirmationId)||{},lossLedger)).reduce((sum,row)=>sum+row.amount/100,0);
+  companyRetained=Math.round(companyRetained*100)/100;const distributable=Math.max(0,Math.round((Number(basis)-companyRetained-distributionRecovery)*100)/100);
   for (const p of partners) run('INSERT OR REPLACE INTO profit_shares VALUES (?,?,?,?,?,?,?,?)',id(),p.id,start,end,distributable,p.share_percent,distributable*p.share_percent/100,now());
   return { totalNetProfit:Number(basis),companyRetained,profitBasis:distributable,shares:q('SELECT ps.*,p.name AS partner_name FROM profit_shares ps JOIN partners p ON p.id=ps.partner_id WHERE period_start=? AND period_end=?',start,end) };
 }
 
 function cleanupProject(projectKey){
   if(!projectKey)return;
-  const linked=one('SELECT (SELECT COUNT(*) FROM invoices WHERE project_key=?)+(SELECT COUNT(*) FROM quotations WHERE project_key=?) AS n',projectKey,projectKey).n||q('SELECT * FROM expenses').some(expense=>expenseTouchesProject(expense,projectKey));
+  const linked=one('SELECT (SELECT COUNT(*) FROM invoices WHERE project_key=?)+(SELECT COUNT(*) FROM quotations WHERE project_key=?)+(SELECT COUNT(*) FROM resource_usage WHERE project_key=?) AS n',projectKey,projectKey,projectKey).n||q('SELECT * FROM expenses').some(expense=>expenseTouchesProject(expense,projectKey));
   if(!linked){run('DELETE FROM projects WHERE project_key=?',projectKey);run('DELETE FROM app_metadata WHERE key=?',PROJECT_COMPANY_SHARE_PREFIX+projectKey);}
 }
 function deleteCustomer(customerId){
   if(!one('SELECT id FROM customers WHERE id=?',customerId))throw new InputError('Customer not found.');
   const projectKeys=q('SELECT project_key FROM projects WHERE customer_id=?',customerId).map(x=>x.project_key);
-  for(const key of projectKeys){const linked=one('SELECT (SELECT COUNT(*) FROM invoices WHERE project_key=?)+(SELECT COUNT(*) FROM quotations WHERE project_key=?) AS n',key,key).n||q('SELECT * FROM expenses').some(expense=>expenseTouchesProject(expense,key));if(linked)throw new InputError('This customer has linked documents or expenses and cannot be deleted.');}
+  for(const key of projectKeys){const linked=one('SELECT (SELECT COUNT(*) FROM invoices WHERE project_key=?)+(SELECT COUNT(*) FROM quotations WHERE project_key=?)+(SELECT COUNT(*) FROM resource_usage WHERE project_key=?) AS n',key,key,key).n||q('SELECT * FROM expenses').some(expense=>expenseTouchesProject(expense,key));if(linked)throw new InputError('This customer has linked documents, resource usage or expenses and cannot be deleted.');}
   for(const key of projectKeys)cleanupProject(key);
   const linked=one('SELECT (SELECT COUNT(*) FROM invoices WHERE customer_id=?)+(SELECT COUNT(*) FROM quotations WHERE customer_id=?)+(SELECT COUNT(*) FROM payments WHERE customer_id=?)+(SELECT COUNT(*) FROM expenses WHERE customer_id=?) AS n',customerId,customerId,customerId,customerId).n;
   if(linked)throw new InputError('This customer has linked documents, payments or expenses and cannot be deleted.');
@@ -5879,8 +6006,39 @@ function deleteProduct(productId){
   if(linked)throw new InputError('This product has stock history or linked documents and cannot be deleted.');
   run('DELETE FROM products WHERE id=?',productId);return {success:true};
 }
+function saveResourceUsage(data, usageId = null) {
+  const resourceId=required(data.resourceId,'Resource');
+  if(!one('SELECT id FROM company_properties WHERE id=?',resourceId))throw new InputError('Choose a valid company resource.');
+  const projectKey=required(data.projectKey,'Project / site');
+  if(!one('SELECT project_key FROM projects WHERE project_key=?',projectKey))throw new InputError('Choose a valid project or site.');
+  const actor=typeof currentTenant==='function'?currentTenant()?.actor:null;
+  if(actor?.role==='salesperson'){
+    const canUse=key=>one('SELECT id FROM invoices WHERE project_key=? AND created_by=? UNION ALL SELECT id FROM quotations WHERE project_key=? AND created_by=? LIMIT 1',key,actor.userId,key,actor.userId);
+    const previous=usageId?one('SELECT project_key FROM resource_usage WHERE id=?',usageId):null;
+    if(!canUse(projectKey)||previous&&!canUse(previous.project_key))throw Object.assign(new InputError('You can only record usage for your own projects.'),{status:403});
+  }
+  const usageDate=String(data.usageDate||today()).trim(),quantity=amount(data.quantity??1,'Usage quantity'),notes=String(data.notes||'').trim(),stamp=now();
+  if(quantity<=0)throw new InputError('Usage quantity must be greater than zero.');
+  if(!/^\d{4}-\d{2}-\d{2}$/.test(usageDate)||!Number.isFinite(Date.parse(usageDate))||new Date(usageDate+'T00:00:00Z').toISOString().slice(0,10)!==usageDate)throw new InputError('Enter a valid usage date.');
+  if(one('SELECT id FROM resource_usage WHERE resource_id=? AND project_key=? AND usage_date=? AND quantity=? AND notes=? AND id<>? LIMIT 1',resourceId,projectKey,usageDate,quantity,notes,usageId||''))throw new InputError('This exact resource usage record already exists.');
+  if(usageId){
+    if(!one('SELECT id FROM resource_usage WHERE id=?',usageId))throw new InputError('Resource usage record not found.');
+    run('UPDATE resource_usage SET resource_id=?,project_key=?,usage_date=?,quantity=?,notes=?,updated_at=? WHERE id=?',resourceId,projectKey,usageDate,quantity,notes,stamp,usageId);
+    return one('SELECT * FROM resource_usage WHERE id=?',usageId);
+  }
+  const newId=id(data.id);run('INSERT INTO resource_usage(id,resource_id,project_key,usage_date,quantity,notes,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?)',newId,resourceId,projectKey,usageDate,quantity,notes,stamp,stamp);return one('SELECT * FROM resource_usage WHERE id=?',newId);
+}
+function deleteResourceUsage(usageId){
+  if(!one('SELECT id FROM resource_usage WHERE id=?',usageId))throw new InputError('Resource usage record not found.');
+  run('DELETE FROM resource_usage WHERE id=?',usageId);return {success:true};
+}
+function visibleProperty(row){
+  const actor=currentTenant()?.actor;if(!actor||accessControl.can(actor,'profit','view'))return row;
+  const {purchase_cost,...visible}=row;return visible;
+}
 function deleteProperty(propertyId){
   if(!one('SELECT id FROM company_properties WHERE id=?',propertyId))throw new InputError('Property not found.');
+  if(one('SELECT id FROM resource_usage WHERE resource_id=? LIMIT 1',propertyId))throw new InputError('This resource has usage history. Remove its usage records first if you really need to delete it.');
   run('DELETE FROM company_properties WHERE id=?',propertyId);return {success:true};
 }
 function deleteService(serviceId){
@@ -5950,7 +6108,7 @@ function api(method, url, body) {
       const identity=accessControl.scalar('SELECT email,email_verified FROM users WHERE id=?',tenant.actor.userId);if(!identity?.email_verified||!validEmail(identity.email))throw new InputError('Verify your account recovery email before changing bank details.');
       const subject=bankChangeSubject(tenant.actor,tenant.company.id,after);accessControl.verifyEmailOtp(subject,'bank-change',identity.email,String(body.bankOtp||''));accessControl.run('DELETE FROM auth_email_otps WHERE subject=? AND purpose=?',subject,'bank-change');accessControl.auditRow(tenant.actor,tenant.company.id,'company.bank_details_changed');
     }
-    const saved=saveCompany(body,internalId),c=saved;if(tenant){const profile={name:c.name,address:c.address,logoData:c.logo_data,bankName:c.bank_name,bankBranch:c.bank_branch,bankAccountNumber:c.bank_account_number,accountHolder:c.account_holder,contactNumbers:c.contact_numbers,email:c.email,website:c.website,locationUrl:c.location_url||'',taxNumber:c.tax_number,additionalInfo:c.additional_info,termsConditions:c.terms_conditions,documentColor:c.document_color,receiverKey:c.receiver_key,currency:one('SELECT currency FROM settings WHERE id=1')?.currency||'LKR',locale:one('SELECT locale FROM settings WHERE id=1')?.locale||'en-LK'};accessControl.updateProfile(tenant.actor,tenant.company.id,profile);tenant.company.name=c.name;tenant.company.profile=profile;}return saved;
+    const saved=saveCompany(body,internalId),c=saved;if(tenant){const profile={name:c.name,address:c.address,logoData:c.logo_data,bankName:c.bank_name,bankBranch:c.bank_branch,bankAccountNumber:c.bank_account_number,accountHolder:c.account_holder,contactNumbers:c.contact_numbers,email:c.email,website:c.website,taxNumber:c.tax_number,additionalInfo:c.additional_info,termsConditions:c.terms_conditions,documentColor:c.document_color,receiverKey:c.receiver_key,currency:one('SELECT currency FROM settings WHERE id=1')?.currency||'LKR',locale:one('SELECT locale FROM settings WHERE id=1')?.locale||'en-LK'};accessControl.updateProfile(tenant.actor,tenant.company.id,profile);tenant.company.name=c.name;tenant.company.profile=profile;}return saved;
   }
   if (method==='DELETE'&&p.startsWith('/api/companies/')) {
     throw new InputError('Use Administrator Control Panel to deactivate a business. Business data is retained for audit and backup.');
@@ -5965,9 +6123,13 @@ function api(method, url, body) {
   if (method==='POST'&&p==='/api/products') return updateCatalog('products',body);
   if (method==='PUT'&&p.startsWith('/api/products/')) return inTransaction(()=>updateCatalog('products',body,p.split('/').pop()));
   if (method==='DELETE'&&p.startsWith('/api/products/')) return inTransaction(()=>deleteProduct(p.split('/').pop()));
-  if (method==='POST'&&p==='/api/properties') return inTransaction(()=>updateCatalog('company_properties',body));
-  if (method==='PUT'&&p.startsWith('/api/properties/')) return inTransaction(()=>updateCatalog('company_properties',body,p.split('/').pop()));
+  if (method==='POST'&&p==='/api/properties') return inTransaction(()=>visibleProperty(updateCatalog('company_properties',body)));
+  if (method==='PUT'&&p.startsWith('/api/properties/')) return inTransaction(()=>visibleProperty(updateCatalog('company_properties',body,p.split('/').pop())));
   if (method==='DELETE'&&p.startsWith('/api/properties/')) return inTransaction(()=>deleteProperty(p.split('/').pop()));
+  if (method==='GET'&&p==='/api/resource-usage') {const actor=currentTenant()?.actor;return actor?.role==='salesperson'?q('SELECT * FROM resource_usage WHERE project_key IN (SELECT project_key FROM invoices WHERE created_by=? UNION SELECT project_key FROM quotations WHERE created_by=?) ORDER BY usage_date DESC,created_at DESC',actor.userId,actor.userId):q('SELECT * FROM resource_usage ORDER BY usage_date DESC,created_at DESC');}
+  if (method==='POST'&&p==='/api/resource-usage') return inTransaction(()=>saveResourceUsage(body));
+  if (method==='PUT'&&p.startsWith('/api/resource-usage/')) return inTransaction(()=>saveResourceUsage(body,p.split('/').pop()));
+  if (method==='DELETE'&&p.startsWith('/api/resource-usage/')) return inTransaction(()=>deleteResourceUsage(p.split('/').pop()));
   if (method==='POST'&&p==='/api/services') return updateCatalog('services',body);
   if (method==='PUT'&&p.startsWith('/api/services/')) return updateCatalog('services',body,p.split('/').pop());
   if (method==='DELETE'&&p.startsWith('/api/services/')) return inTransaction(()=>deleteService(p.split('/').pop()));
@@ -5988,6 +6150,7 @@ function api(method, url, body) {
   if (method==='POST'&&p==='/api/expenses') return inTransaction(()=>createExpense(body));
   if (method==='PUT'&&p.startsWith('/api/expenses/')) return inTransaction(()=>createExpense(body,p.split('/').pop()));
   if (method==='DELETE'&&p.startsWith('/api/expenses/')) return inTransaction(()=>deleteExpense(p.split('/').pop()));
+  if (method==='DELETE'&&p.startsWith('/api/expense-attachments/')) return inTransaction(()=>deleteExpenseAttachment(p.split('/').pop()));
   if (method==='POST'&&p==='/api/expense-categories') return inTransaction(()=>saveExpenseCategory(body));
   if (method==='PUT'&&p.startsWith('/api/expense-categories/')) return inTransaction(()=>saveExpenseCategory(body,p.split('/').pop()));
   if (method==='DELETE'&&p.startsWith('/api/expense-categories/')) {const categoryId=p.split('/').pop(),category=one('SELECT * FROM expense_categories WHERE id=?',categoryId);if(!category)throw new InputError('Expense category not found.');if(one('SELECT id FROM expenses WHERE category=?',category.name))throw new InputError('This category is used by expenses and cannot be deleted.');run('DELETE FROM expense_categories WHERE id=?',categoryId);return {success:true};}
@@ -6053,23 +6216,32 @@ function databaseForCompany(company,{migrateLegacy=false}={}){
   });tenantDatabases.set(company.id,target);return target;
 }
 function requiredScope(method,pathname,body={}){
-  if(pathname==='/api/bootstrap')return {scope:'dashboard',action:'view'};if(pathname==='/api/backup/status'||pathname==='/api/backup/history')return {scope:'backup',action:'view'};if(pathname==='/api/backup/download')return {scope:'backup',action:'export'};if(pathname==='/api/backup.xlsx'||pathname==='/api/restore'||pathname==='/api/backup/restore-upload')return {scope:'backup',action:'restore'};if(pathname==='/api/backup/restore-history')return {scope:'backup',action:'restore'};if(pathname==='/api/backup/create')return {scope:'backup',action:'create'};if(pathname.startsWith('/api/expense-attachments/'))return {scope:'expenses',action:'view'};
-  const entries=[['customers','customers'],['suppliers','suppliers'],['products','products'],['properties','company_properties'],['services','services'],['invoices','invoices'],['quotations','quotations'],['projects','profit'],['purchases','purchases'],['payments','payments'],['supplier-payments','payments'],['expenses','expenses'],['expense-categories','expenses'],['stock-adjustments','inventory'],['partners','partners'],['profit-shares','profit'],['companies','companies'],['settings','companies']],match=entries.find(([prefix])=>pathname.startsWith('/api/'+prefix));if(!match)return null;let scope=match[1],action=method==='GET'?'view':method==='POST'?'create':method==='PUT'?'edit':method==='DELETE'?'delete':'view';if(pathname==='/api/stock-adjustments')action='adjust';if(scope==='quotations'&&body.documentType==='estimate')scope='estimates';return {scope,action};
+  if(pathname==='/api/bootstrap')return {scope:'dashboard',action:'view'};if(pathname==='/api/backup/status'||pathname==='/api/backup/history')return {scope:'backup',action:'view'};if(pathname==='/api/backup/download')return {scope:'backup',action:'export'};if(pathname==='/api/backup.xlsx'||pathname==='/api/restore'||pathname==='/api/backup/restore-upload')return {scope:'backup',action:'restore'};if(pathname==='/api/backup/restore-history')return {scope:'backup',action:'restore'};if(pathname==='/api/backup/create')return {scope:'backup',action:'create'};if(pathname.startsWith('/api/expense-attachments/'))return {scope:'expenses',action:method==='DELETE'?'delete':'view'};
+   const entries=[['customers','customers'],['suppliers','suppliers'],['products','products'],['properties','company_properties'],['resource-usage','company_properties'],['services','services'],['invoices','invoices'],['quotations','quotations'],['projects','profit'],['purchases','purchases'],['payments','payments'],['supplier-payments','payments'],['expenses','expenses'],['expense-categories','expenses'],['stock-adjustments','inventory'],['partners','partners'],['profit-shares','profit'],['warranty-claims','warranty_claims'],['repair-intakes','warranty_claims'],['companies','companies'],['settings','companies']],match=entries.find(([prefix])=>pathname.startsWith('/api/'+prefix));if(!match)return null;let scope=match[1],action=method==='GET'?'view':method==='POST'?'create':method==='PUT'?'edit':method==='DELETE'?'delete':'view';if(pathname==='/api/stock-adjustments')action='adjust';if(scope==='quotations'&&body.documentType==='estimate')scope='estimates';return {scope,action};
 }
 function filterBootstrap(snapshot,access,actor){
-  const visible={...snapshot},scopes={customers:'customers',suppliers:'suppliers',products:'products',company_properties:'company_properties',services:'services',invoices:'invoices',invoice_items:'invoices',payments:'payments',quotations:'quotations',quotation_items:'quotations',purchases:'purchases',purchase_items:'purchases',supplier_payments:'payments',expenses:'expenses',expense_categories:'expenses',expense_attachments:'expenses',expense_allocations:'expenses',expense_invoices:'expenses',projects:'quotations',project_profit_settings:'profit',stock_movements:'inventory',partners:'partners',profit_shares:'profit',companies:'companies',settings:'companies'};
+  const visible={...snapshot},scopes={customers:'customers',suppliers:'suppliers',products:'products',company_properties:'company_properties',resource_usage:'company_properties',services:'services',invoices:'invoices',invoice_items:'invoices',payments:'payments',quotations:'quotations',quotation_items:'quotations',purchases:'purchases',purchase_items:'purchases',supplier_payments:'payments',expenses:'expenses',expense_categories:'expenses',expense_attachments:'expenses',expense_allocations:'expenses',expense_invoices:'expenses',projects:'quotations',project_profit_settings:'profit',stock_movements:'inventory',partners:'partners',profit_shares:'profit',warranty_claims:'warranty_claims',warranty_claim_events:'warranty_claims',repair_intakes:'warranty_claims',companies:'companies',settings:'companies'};
   for(const [table,scope]of Object.entries(scopes))if(!access.can(actor,scope,'view'))visible[table]=[];
-  const membership=access.status(actor).permissions;if(actor.role==='salesperson'){const own=snapshot.invoices.filter(row=>row.created_by===actor.userId),ids=new Set(own.map(row=>row.id));visible.invoices=own;visible.invoice_items=snapshot.invoice_items.filter(row=>ids.has(row.invoice_id));visible.payments=snapshot.payments.filter(row=>ids.has(row.invoice_id));const quotes=snapshot.quotations.filter(row=>row.created_by===actor.userId),qids=new Set(quotes.map(row=>row.id));visible.quotations=quotes;visible.quotation_items=snapshot.quotation_items.filter(row=>qids.has(row.quotation_id));const projectKeys=new Set([...own,...quotes].map(row=>row.project_key));visible.projects=snapshot.projects.filter(row=>projectKeys.has(row.project_key));}
+  const membership=access.status(actor).permissions;if(actor.role==='salesperson'){const own=snapshot.invoices.filter(row=>row.created_by===actor.userId),ids=new Set(own.map(row=>row.id));visible.invoices=own;visible.invoice_items=snapshot.invoice_items.filter(row=>ids.has(row.invoice_id));visible.payments=snapshot.payments.filter(row=>ids.has(row.invoice_id));const quotes=snapshot.quotations.filter(row=>row.created_by===actor.userId),qids=new Set(quotes.map(row=>row.id));visible.quotations=quotes;visible.quotation_items=snapshot.quotation_items.filter(row=>qids.has(row.quotation_id));const projectKeys=new Set([...own,...quotes].map(row=>row.project_key));visible.projects=snapshot.projects.filter(row=>projectKeys.has(row.project_key));visible.resource_usage=snapshot.resource_usage.filter(row=>projectKeys.has(row.project_key));}
   if(!membership.profit?.view){visible.products=visible.products.map(({purchase_price,...x})=>x);visible.services=visible.services.map(({unit_cost,...x})=>x);visible.invoice_items=visible.invoice_items.map(({unit_cost,...x})=>x);visible.quotation_items=visible.quotation_items.map(({unit_cost,...x})=>x);visible.purchase_items=visible.purchase_items.map(({unit_cost,...x})=>x);}
+  // Resource users need only site names and keys for recording tool use.
+  const allowedSites=actor.role==='salesperson'?visible.projects:snapshot.projects;
+  if(!access.can(actor,'company_properties','view'))visible.resource_usage=[];
+  visible.resource_sites=access.can(actor,'company_properties','view')?allowedSites.map(({project_key,title})=>({project_key,title})):[];
+  if(!membership.profit?.view)visible.company_properties=visible.company_properties.map(({purchase_cost,...item})=>item);
   visible.companies=visible.companies.slice(0,1);return visible;
 }
 const accessControl=new AccessControl({registryPath:runtime_path.join(DATA_DIR,'access.sqlite'),dataRoot:runtime_path.join(DATA_DIR,'companies'),legacyProfile:()=>{if(!hadLegacyDatabase)return null;const c=one('SELECT * FROM companies WHERE is_default=1 LIMIT 1');if(!c||c.name==='Meridian Supply Co.'&&!c.email&&!c.address&&!c.logo_data)return null;return {name:c.name,address:c.address,logoData:c.logo_data,bankName:c.bank_name,bankBranch:c.bank_branch,bankAccountNumber:c.bank_account_number,accountHolder:c.account_holder,contactNumbers:c.contact_numbers,email:c.email,website:c.website,taxNumber:c.tax_number,additionalInfo:c.additional_info,termsConditions:c.terms_conditions,documentColor:c.document_color||'#1f5fae',receiverKey:c.receiver_key||'',currency:one('SELECT currency FROM settings WHERE id=1')?.currency||'LKR',locale:one('SELECT locale FROM settings WHERE id=1')?.locale||'en-LK'}},onCompanyCreate:(company,{isInitial=false}={})=>{const connection=databaseForCompany(company,{migrateLegacy:isInitial});databaseContext.run({db:connection,company,actor:null},()=>writeAutomaticBackup())},onCompanyUpdate:company=>{const cfg=accessControl.companyConfig(company.id);if(cfg){const connection=databaseForCompany(cfg);databaseContext.run({db:connection,company:cfg,actor:null},()=>saveCompany(cfg.profile,'company-default'));}}});
+const platformAdmin=typeof globalThis.INVOICEY_CREATE_PLATFORM_ADMIN==='function'?globalThis.INVOICEY_CREATE_PLATFORM_ADMIN({access:accessControl,closeTenant:companyId=>{
+  const timer=automaticBackupTimers.get(companyId);if(timer)clearTimeout(timer);automaticBackupTimers.delete(companyId);
+  const connection=tenantDatabases.get(companyId);if(connection){connection.close();tenantDatabases.delete(companyId);}
+}}):null;
 const hostedCorsOrigins=String(process.env.INVOICEY_CORS_ORIGIN||'').split(',').map(value=>value.trim()).filter(Boolean);
 const applyHostedCors=(req,res)=>{
   if(process.env.INVOICEY_HOSTED!=='1')return false;
   const origin=String(req.headers?.origin||'');
   const allowed=origin&&hostedCorsOrigins.includes(origin)?origin:'';
-  if(allowed){res.setHeader('access-control-allow-origin',allowed);res.setHeader('access-control-allow-credentials','true');res.setHeader('access-control-allow-methods','GET,POST,PUT,DELETE,OPTIONS');res.setHeader('access-control-allow-headers','content-type');res.setHeader('access-control-expose-headers','content-disposition');res.setHeader('vary','Origin');}
+  if(allowed){res.setHeader('access-control-allow-origin',allowed);res.setHeader('access-control-allow-credentials','true');res.setHeader('access-control-allow-methods','GET,POST,PUT,DELETE,OPTIONS');res.setHeader('access-control-allow-headers','content-type, x-backup-filename');res.setHeader('access-control-expose-headers','content-disposition');res.setHeader('vary','Origin');}
   return Boolean(allowed);
 };
 const server=http.createServer(async(req,res)=>{
@@ -6080,11 +6252,12 @@ const server=http.createServer(async(req,res)=>{
   if(process.env.INVOICEY_HOSTED==='1'&&req.method==='OPTIONS'&&url.pathname.startsWith('/api/')){res.writeHead(corsAllowed?204:403);res.end();return;}
   if (url.pathname.startsWith('/api/')) {
     try {
-      let body={},rawBody=null; if ((req.method==='POST'||req.method==='PUT')) { const request=await readRequestBytes(req,url.pathname==='/api/backup/restore-upload'?64*1024*1024:32*1024*1024);if(url.pathname==='/api/backup/restore-upload'){rawBody=request;}else if(url.pathname!=='/api/restore'&&request.length){try{body=JSON.parse(request.toString('utf8'));}catch{throw new InputError('Request body must be valid JSON.');}} }
+      let body={}; if(req.method==='POST'&&url.pathname==='/api/backup/restore-upload'){body=await readRequestBytes(req,128*1024*1024);} else if (['POST','PUT','DELETE'].includes(req.method)&&url.pathname!=='/api/restore') { const request=await readRequestBytes(req,32*1024*1024);if(request.length){try{body=JSON.parse(request.toString('utf8'));}catch{throw new InputError('Request body must be valid JSON.');}} }
       const authResult=await accessControl.handleApi(req,url,body);
       if(authResult){if(authResult.cookie)res.setHeader('set-cookie',authResult.cookie);res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(authResult.body));return;}
       const actor=accessControl.authenticate(req);
       if(!actor)throw Object.assign(new Error('Sign in to continue.'),{status:401});
+      if(actor.isSuper)throw Object.assign(new Error('Platform administration cannot access private company records, documents or backups.'),{status:403});
       const company=actor.activeCompanyId?accessControl.companyConfig(actor.activeCompanyId):null;
       if(!company)throw Object.assign(new Error('Select an active company before continuing.'),{status:403});
       const scope=requiredScope(req.method,url.pathname,body);
@@ -6113,19 +6286,26 @@ const server=http.createServer(async(req,res)=>{
       if(req.method==='POST'&&url.pathname==='/api/backup/create'){
         const current=writeAutomaticBackup(),file=retainBackup(current,'manual');accessControl.auditRow(actor,company.id,'backup.created',runtime_path.basename(file));const result={success:true,fileName:runtime_path.basename(file),backup:backupStatus(),format:'private-company-sqlite'};res.writeHead(200,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(result));return;
       }
+      if(req.method==='POST'&&url.pathname==='/api/backup/restore-upload'){
+        const originalName=String(req.headers['x-backup-filename']||'').trim();
+        if(!originalName||runtime_path.basename(originalName)!==originalName||!/^.{1,180}\.invoicey(?:-backup)?$/i.test(originalName))throw new InputError('Choose a valid itsme invoicey account backup file.');
+        if(!body?.length)throw new InputError('The selected backup file is empty.');
+        const uploadPath=runtime_path.join(tenantArchivePath(),'.uploaded-'+randomUUID()+'.invoicey');
+        mkdirSync(tenantArchivePath(),{recursive:true});
+        writeFileSync(uploadPath,body,{flag:'wx'});
+        try{
+          archiveCurrentBackup();
+          const result=restoreCompanySnapshot(uploadPath);
+          accessControl.auditRow(actor,company.id,'backup.restored_from_device',originalName);
+          res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));
+        } finally {try{unlinkSync(uploadPath);}catch{}}
+        return;
+      }
       if(req.method==='POST'&&url.pathname==='/api/backup/restore-history'){
         const name=String(body.fileName||'');if(!name||runtime_path.basename(name)!==name||!name.toLowerCase().endsWith('.invoicey-backup'))throw new InputError('Choose a valid private account backup from this company’s history.');const archive=runtime_path.join(tenantArchivePath(),name);if(!existsSync(archive))throw new InputError('That company backup was not found.');archiveCurrentBackup();const result=restoreCompanySnapshot(archive);accessControl.auditRow(actor,company.id,'backup.restored',name);res.writeHead(200,{'content-type':'application/json; charset=utf-8'});res.end(JSON.stringify(result));return;
       }
-      if(req.method==='POST'&&url.pathname==='/api/backup/restore-upload'){
-        if(!rawBody?.length)throw new InputError('Choose a private account backup file first.');
-        const temporary=runtime_path.join(tenantArchivePath(),`.restore-upload-${process.pid}-${randomUUID()}.invoicey`);
-        mkdirSync(runtime_path.dirname(temporary),{recursive:true});
-        try{writeFileSync(temporary,rawBody,{flag:'wx'});archiveCurrentBackup();const result=restoreCompanySnapshot(temporary);accessControl.auditRow(actor,company.id,'backup.restored_upload','manual device backup');res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(result));}
-        finally{try{unlinkSync(temporary);}catch{}}
-        return;
-      }
       if(req.method==='GET'&&url.pathname.startsWith('/api/expense-attachments/')){const attachment=one('SELECT * FROM expense_attachments WHERE id=?',url.pathname.split('/').pop());if(!attachment){res.writeHead(404);res.end('Not found');return;}const safeFile=attachment.file_name.replace(/[\r\n"\\]/g,'_');res.writeHead(200,{'content-type':attachment.mime_type,'content-length':attachment.size_bytes,'content-disposition':`${attachment.mime_type==='application/pdf'?'attachment':'inline'}; filename="${safeFile}"`,'x-content-type-options':'nosniff','cache-control':'no-store'});res.end(attachment.file_data);return;}
-      const result=api(req.method,url,body);
+      const result=platformAdmin?platformAdmin.runDocumentMutation(company,req.method,url,()=>api(req.method,url,body)):api(req.method,url,body);
       if (result?.error) {res.writeHead(404,{'content-type':'application/json'});res.end(JSON.stringify(result));return;}
       const filtered=url.pathname==='/api/bootstrap'?filterBootstrap(result,accessControl,actor):result;
       if(['POST','PUT','DELETE'].includes(req.method)){
@@ -6136,7 +6316,7 @@ const server=http.createServer(async(req,res)=>{
       }
       res.writeHead(200,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify(filtered));
       });
-    } catch(error) {const status=error.status|| (error instanceof InputError?400:500);res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({error:status>=500?'The server could not complete this request.':error.message||'Something went wrong.'}));if(status>=500)console.error(error);}
+    } catch(error) {const status=error.status|| (error instanceof InputError?400:500);res.writeHead(status,{'content-type':'application/json; charset=utf-8','cache-control':'no-store'});res.end(JSON.stringify({error:status>=500?(error.publicMessage||'The server could not complete this request.'):error.message||'Something went wrong.'}));if(status>=500)console.error(error);}
     return;
   }
   const requested=decodeURIComponent(url.pathname==='/'?'/index.html':url.pathname);
@@ -6144,11 +6324,317 @@ const server=http.createServer(async(req,res)=>{
   if(!file.startsWith(runtime_path.resolve(ROOT,'public')+runtime_path.sep)&&file!==runtime_path.resolve(ROOT,'public','index.html')){res.writeHead(403);res.end('Forbidden');return;}
   if(existsSync(file)&&!statSync(file).isFile()){res.writeHead(404);res.end('Not found');return;}
   const target=existsSync(file)?file:runtime_path.join(ROOT,'public','index.html');
-  res.writeHead(200,{'content-type':mime[runtime_path.extname(target)]||'application/octet-stream','cache-control':'no-cache'});const stream=createReadStream(target);stream.on?.('error',()=>res.end());try{stream.pipe(res)}catch{res.end()}
+  const extension=runtime_path.extname(target).toLowerCase(),cacheControl=extension==='.html'?'no-cache':'public, max-age=300, stale-while-revalidate=60';
+  res.writeHead(200,{'content-type':mime[extension]||'application/octet-stream','cache-control':cacheControl});const stream=createReadStream(target);stream.on?.('error',()=>res.end());try{stream.pipe(res)}catch{res.end()}
 });
 const port=Number(process.env.PORT||4173);
 const host=process.env.HOST||'127.0.0.1';
 server.listen(port,host,()=>console.log(`Ledgerly is running at http://${host}:${server.address().port}`));
+
+// Proforma invoices build on the existing quotation ledger.  They are marked
+// in app_metadata so existing databases keep their SQLite check constraints
+// and backup format, while still gaining a durable document state, advance
+// payments, expense links and conversion history.
+const INVOICEY_PROFORMA_PREFIX='proforma:';
+const INVOICEY_PROFORMA_PAYMENT_PREFIX='proforma-payment:';
+const INVOICEY_EXPENSE_PROFORMA_PREFIX='expense-proformas:';
+const invoiceyParseJson=(value,fallback)=>{try{return JSON.parse(String(value||''))}catch{return fallback}};
+function invoiceyIsProforma(idOrRow){const idValue=typeof idOrRow==='object'?idOrRow?.id:idOrRow;return !!idValue&&!!one('SELECT key FROM app_metadata WHERE key=?',INVOICEY_PROFORMA_PREFIX+idValue);}
+function invoiceyProformaPaymentRows(){
+  return q('SELECT key,value FROM app_metadata WHERE key LIKE ?',INVOICEY_PROFORMA_PAYMENT_PREFIX+'%').map(row=>({id:row.key.slice(INVOICEY_PROFORMA_PAYMENT_PREFIX.length),...invoiceyParseJson(row.value,{})})).filter(row=>row.quotationId&&Number(row.amount)>0);
+}
+function invoiceyExpenseProformaIds(expenseId){const row=one('SELECT value FROM app_metadata WHERE key=?',INVOICEY_EXPENSE_PROFORMA_PREFIX+expenseId);const parsed=invoiceyParseJson(row?.value,[]);return Array.isArray(parsed)?[...new Set(parsed.map(value=>String(value||'').trim()).filter(Boolean))]:[];}
+function invoiceySaveExpenseProformaIds(expenseId,ids){const values=[...new Set((Array.isArray(ids)?ids:[]).map(value=>String(value||'').trim()).filter(Boolean))];if(!values.length){run('DELETE FROM app_metadata WHERE key=?',INVOICEY_EXPENSE_PROFORMA_PREFIX+expenseId);return [];}for(const value of values){const quote=one('SELECT id FROM quotations WHERE id=?',value);if(!quote||!invoiceyIsProforma(value))throw new InputError('Select valid proforma invoices.');}run('INSERT OR REPLACE INTO app_metadata(key,value) VALUES (?,?)',INVOICEY_EXPENSE_PROFORMA_PREFIX+expenseId,JSON.stringify(values));return values;}
+function invoiceyProformaLayout(){return invoiceyParseJson(one('SELECT value FROM app_metadata WHERE key=?','document-layout')?.value,{headerText:'',headerAlign:'left',footerText:'',showBank:true});}
+function invoiceyMigrateProformaMetadata(){db.exec('CREATE INDEX IF NOT EXISTS idx_app_metadata_document_layout ON app_metadata(key)');}
+const invoiceyBaseMigrateCompanyProfiles=migrateCompanyProfiles;
+migrateCompanyProfiles=function(){invoiceyBaseMigrateCompanyProfiles();invoiceyMigrateProformaMetadata();};
+invoiceyMigrateProformaMetadata();
+const invoiceyBaseBootstrap=bootstrap;
+bootstrap=function(){
+  const snapshot=invoiceyBaseBootstrap();
+  snapshot.quotations=snapshot.quotations.map(row=>invoiceyIsProforma(row.id)?{...row,document_kind:'proforma'}:row);
+  snapshot.proforma_payments=invoiceyProformaPaymentRows();
+  snapshot.expense_proformas=q('SELECT key,value FROM app_metadata WHERE key LIKE ?',INVOICEY_EXPENSE_PROFORMA_PREFIX+'%').map(row=>({expenseId:row.key.slice(INVOICEY_EXPENSE_PROFORMA_PREFIX.length),proformaIds:invoiceyParseJson(row.value,[])}));
+  snapshot.document_layout=invoiceyProformaLayout();
+  return snapshot;
+};
+const invoiceyBaseFilterBootstrap=filterBootstrap;
+filterBootstrap=function(snapshot,access,actor){
+  const visible=invoiceyBaseFilterBootstrap(snapshot,access,actor);
+  if(!access.can(actor,'payments','view'))visible.proforma_payments=[];
+  if(!access.can(actor,'expenses','view'))visible.expense_proformas=[];
+  return visible;
+};
+const invoiceyBaseRequiredScope=requiredScope;
+requiredScope=function(method,pathname,body={}){
+  if(pathname.startsWith('/api/proforma-payments'))return {scope:'payments',action:method==='GET'?'view':method==='DELETE'?'delete':'create'};
+  if(pathname==='/api/company-document-settings')return {scope:'companies',action:method==='GET'?'view':'edit'};
+  return invoiceyBaseRequiredScope(method,pathname,body);
+};
+const invoiceyBaseApi=api;
+api=function(method,url,body={}){
+  const pathname=url.pathname;
+  if(method==='PUT'&&pathname==='/api/company-document-settings'){
+    const layout={headerText:String(body.headerText||'').slice(0,500),headerAlign:['left','center','right'].includes(String(body.headerAlign))?String(body.headerAlign):'left',footerText:String(body.footerText||'').slice(0,500),showBank:body.showBank!==false};
+    run('INSERT OR REPLACE INTO app_metadata(key,value) VALUES (?,?)','document-layout',JSON.stringify(layout));return layout;
+  }
+  if(method==='POST'&&pathname==='/api/proforma-payments'){
+    const quotationId=required(body.quotationId,'Proforma invoice'),quote=one('SELECT * FROM quotations WHERE id=?',quotationId);
+    if(!quote||!invoiceyIsProforma(quote))throw new InputError('Select a valid proforma invoice.');
+    if(quote.invoice_id)throw new InputError('This proforma invoice has already been converted to an invoice.');
+    const value=amount(body.amount,'Advance payment',{zero:false}),paid=invoiceyProformaPaymentRows().filter(row=>row.quotationId===quotationId&&!row.invoiceId).reduce((sum,row)=>sum+Number(row.amount||0),0);
+    if(paid+value>Number(quote.total)+0.005)throw new InputError('The advance payment cannot be greater than the proforma balance.');
+    const payment={id:id(),quotationId,customerId:quote.customer_id,amount:value,method:String(body.method||'Cash'),reference:String(body.reference||''),paymentDate:String(body.paymentDate||today()),notes:String(body.notes||''),createdAt:now()};
+    run('INSERT INTO app_metadata(key,value) VALUES (?,?)',INVOICEY_PROFORMA_PAYMENT_PREFIX+payment.id,JSON.stringify(payment));return payment;
+  }
+  if(method==='DELETE'&&pathname.startsWith('/api/proforma-payments/')){
+    const paymentId=pathname.split('/').pop(),row=one('SELECT value FROM app_metadata WHERE key=?',INVOICEY_PROFORMA_PAYMENT_PREFIX+paymentId),payment=invoiceyParseJson(row?.value,null);
+    if(!payment)throw new InputError('Proforma payment not found.');
+    if(payment.invoiceId)throw new InputError('This advance payment was already applied to the final invoice.');
+    run('DELETE FROM app_metadata WHERE key=?',INVOICEY_PROFORMA_PAYMENT_PREFIX+paymentId);return {success:true};
+  }
+  if((method==='POST'||method==='PUT')&&(pathname==='/api/quotations'||/^\/api\/quotations\/[^/]+$/.test(pathname))){
+    const quoteId=method==='PUT'?pathname.split('/').pop():'';
+    const previous=quoteId?one('SELECT * FROM quotations WHERE id=?',quoteId):null,requested=String(body.documentType||'')==='proforma'||String(body.documentKind||'')==='proforma';
+    if(requested&&(!previous||!invoiceyIsProforma(previous.id)))throw new InputError('Create a quotation first, then use Convert to proforma invoice.');
+    if(previous&&invoiceyIsProforma(previous.id)&&!requested)throw new InputError('A proforma invoice must remain a proforma invoice until it is converted.');
+    const normalized={...body,documentType:requested?'quotation':body.documentType};
+    const result=invoiceyBaseApi(method,url,normalized),savedId=result?.id||quoteId;
+    if(requested||previous&&invoiceyIsProforma(previous.id))run('INSERT OR REPLACE INTO app_metadata(key,value) VALUES (?,?)',INVOICEY_PROFORMA_PREFIX+savedId,JSON.stringify({createdAt:now()}));
+    return savedId?{...result,document_kind:invoiceyIsProforma(savedId)?'proforma':''}:result;
+  }
+  if((method==='POST'||method==='PUT')&&(pathname==='/api/expenses'||/^\/api\/expenses\/[^/]+$/.test(pathname))){
+    const result=invoiceyBaseApi(method,url,body),ids=invoiceySaveExpenseProformaIds(result.id,body.proformaIds);
+    if(ids.length===1){const quote=one('SELECT project_key FROM quotations WHERE id=?',ids[0]);if(quote?.project_key)run('UPDATE expenses SET project_key=? WHERE id=? AND length(project_key)=0',quote.project_key,result.id);}
+    return {...result,proformaIds:ids};
+  }
+  if(method==='POST'&&/^\/api\/quotations\/[^/]+\/convert$/.test(pathname)){
+    const quoteId=pathname.split('/')[3],quote=one('SELECT * FROM quotations WHERE id=?',quoteId);
+    if(body.targetDocument==='proforma')return inTransaction(()=>{
+      if(!quote)throw new InputError('Quotation not found.');
+      if(quote.invoice_id)throw new InputError('This document already has a final invoice.');
+      if(invoiceyIsProforma(quote.id))throw new InputError('This quotation is already a proforma invoice.');
+      const advance=amount(body.paidAmount||0,'Advance payment');
+      if(advance>Number(quote.total)+0.005)throw new InputError('The advance payment cannot exceed the document total.');
+      run('INSERT INTO app_metadata(key,value) VALUES (?,?)',INVOICEY_PROFORMA_PREFIX+quoteId,JSON.stringify({createdAt:now(),sourceQuotationNumber:quote.number}));
+      if(advance>0)api('POST',new URL('/api/proforma-payments',url),{quotationId:quoteId,amount:advance,method:body.paymentMethod||'Cash',paymentDate:body.invoiceDate||today(),reference:body.reference||''});
+      return {...quote,document_kind:'proforma'};
+    });
+    if(quote&&invoiceyIsProforma(quote.id)){
+      const result=invoiceyBaseApi(method,url,{...body,paidAmount:0});
+      const advances=invoiceyProformaPaymentRows().filter(row=>row.quotationId===quoteId&&!row.invoiceId);
+      for(const advance of advances){const paymentId=id();run('INSERT INTO payments VALUES (?,?,?,?,?,?,?,?,?)',paymentId,result.id,quote.customer_id,Number(advance.amount),advance.method||'Cash',advance.reference||'',advance.paymentDate||today(),advance.notes||'',now());run('UPDATE app_metadata SET value=? WHERE key=?',JSON.stringify({...advance,invoiceId:result.id,appliedAt:now()}),INVOICEY_PROFORMA_PAYMENT_PREFIX+advance.id);}
+      for(const row of q('SELECT id FROM expenses')){const ids=invoiceyExpenseProformaIds(row.id);if(ids.includes(quoteId)){const invoiceIds=storedExpenseInvoices(one('SELECT * FROM expenses WHERE id=?',row.id));saveExpenseInvoices(row.id,[...new Set([...invoiceIds,result.id])]);}}
+      refreshInvoice(result.id);return result;
+    }
+  }
+  return invoiceyBaseApi(method,url,body);
+};
+
+// Loss coverage is a profit allocation ledger in the current tenant database.
+// Existing business documents remain the source of revenue and expense facts.
+const LC_KEY='finance-loss-coverage-v1';
+const lcCents=value=>Math.round(Number(value)*100);
+function lcRead(){const row=one('SELECT value FROM app_metadata WHERE key=?',LC_KEY);return row?JSON.parse(row.value):{losses:[],recoveries:[],confirmations:[],incomes:[],charges:{},policy:{enabled:false,mode:'percentage',value:0,source:'company'},audit:[]};}
+function lcSave(ledger){run('INSERT OR REPLACE INTO app_metadata(key,value) VALUES (?,?)',LC_KEY,JSON.stringify(ledger));}
+function lcMoney(value,label='Amount'){const number=Number(value);if(!Number.isFinite(number)||number<0||number>1e12)throw new InputError(label+' must be a valid non-negative amount.');return lcCents(number);}
+function lcAdmin(){const tenant=currentTenant();accessControl.requireCompanyAdmin(tenant.actor,tenant.company.id);}
+function lcAudit(ledger,action,reference){ledger.audit.push({id:id(),action,reference,actor:currentTenant()?.actor?.userId,at:now()});}
+function lcProjectFacts(key,ledger){
+  const project=one('SELECT * FROM projects WHERE project_key=?',key);if(!project)throw new InputError('Project not found.');
+  const invoices=q('SELECT * FROM invoices WHERE project_key=? ORDER BY id',key);let revenue=0,cost=0,missing=0;const evidence=[];
+  for(const invoice of invoices){const stats=profitInvoiceStats(invoice),paid=Number(one('SELECT COALESCE(SUM(amount),0) AS amount FROM payments WHERE invoice_id=?',invoice.id).amount);revenue+=lcCents(stats.sales);cost+=lcCents(stats.directCost);missing+=stats.missing;evidence.push({id:invoice.id,total:lcCents(invoice.total),revenue:lcCents(stats.sales),cost:lcCents(stats.directCost),missing:stats.missing,paid:lcCents(paid)});}
+  let expenses=0;const expenseEvidence=[];
+  for(const expense of q('SELECT * FROM expenses ORDER BY id')){const saved=storedExpenseAllocations(expense);let value=0;if(saved.length)value=saved.filter(row=>row.project_key===key).reduce((sum,row)=>sum+lcCents(row.amount),0);else{const keys=[...new Set([...storedExpenseInvoices(expense).map(invoiceId=>one('SELECT project_key FROM invoices WHERE id=?',invoiceId)?.project_key),...invoiceyExpenseProformaIds(expense.id).map(quoteId=>one('SELECT project_key FROM quotations WHERE id=?',quoteId)?.project_key)].filter(Boolean))];const index=keys.indexOf(key),total=lcCents(expense.amount);if(index>=0)value=Math.floor(total/keys.length)+(index<total%keys.length?1:0);}if(value){expenses+=value;expenseEvidence.push({id:expense.id,amount:value});}}
+  const profit=revenue-cost-expenses,config=ledger.charges[key]||{mode:'percentage',value:projectCompanyShare(key)},positive=Math.max(0,profit),company=Math.min(positive,config.mode==='fixed'?lcCents(config.value):Math.round(positive*Number(config.value)/100));
+  return {kind:'project',key,title:project.title||key,invoices:evidence,revenue,cost,expenses,profit,company,distributable:positive-company,missing,fullyPaid:invoices.length>0&&evidence.every(row=>row.paid>=row.total),signature:JSON.stringify({invoices:evidence.map(({paid,...rest})=>rest),expenseEvidence,config})};
+}
+function lcFacts(kind,key,ledger){if(kind==='project')return lcProjectFacts(key,ledger);const income=ledger.incomes.find(row=>row.id===key&&!row.voidedAt);if(!income)throw new InputError('Income record not found.');return {kind:'income',key,title:income.reference,revenue:income.amount,cost:income.cost,expenses:0,profit:income.amount-income.cost,company:Math.max(0,income.amount-income.cost),distributable:0,missing:0,fullyPaid:true,invoices:[],signature:JSON.stringify(income)};}
+function lcValid(confirmation,ledger){try{const facts=lcFacts(confirmation.kind,confirmation.key,ledger);return facts.fullyPaid&&!facts.missing&&facts.signature===confirmation.signature&&confirmation.payments.every(saved=>(facts.invoices.find(row=>row.id===saved.id)?.paid??-1)>=saved.paid);}catch{return false;}}
+function lcReconcile(ledger){for(const entry of ledger.recoveries.filter(row=>!row.reversedAt)){const confirmation=ledger.confirmations.find(row=>row.id===entry.confirmationId);if(!confirmation||!lcValid(confirmation,ledger)){entry.reversedAt=now();entry.reversalReason='Source profit, cost or payment changed; confirm again before recovery.';lcAudit(ledger,'recovery.reversed',entry.id);}}}
+function lcView(ledger){const active=ledger.recoveries.filter(row=>!row.reversedAt&&lcValid(ledger.confirmations.find(item=>item.id===row.confirmationId)||{},ledger));const losses=ledger.losses.map(loss=>({...loss,recovered:active.filter(row=>row.lossId===loss.id).reduce((sum,row)=>sum+row.amount,0)})).map(loss=>({...loss,outstanding:loss.amount-loss.recovered}));const sources=[...q('SELECT project_key FROM projects').map(row=>lcProjectFacts(row.project_key,ledger)),...ledger.incomes.filter(row=>!row.voidedAt).map(row=>lcFacts('income',row.id,ledger))].map(source=>{const recoveries=active.filter(row=>row.kind===source.kind&&row.key===source.key),fromCompany=recoveries.filter(row=>row.source==='company').reduce((sum,row)=>sum+row.amount,0),fromDistribution=recoveries.filter(row=>row.source==='distributable').reduce((sum,row)=>sum+row.amount,0);return {...source,confirmation:ledger.confirmations.find(row=>row.kind===source.kind&&row.key===source.key&&lcValid(row,ledger))?.id||'',fromCompany,fromDistribution,companyAvailable:Math.max(0,source.company-fromCompany),distributionAvailable:Math.max(0,source.distributable-fromDistribution)};});return {policy:ledger.policy,losses,recoveries:ledger.recoveries,audit:ledger.audit,charges:ledger.charges,sources,totals:{losses:losses.reduce((sum,row)=>sum+row.amount,0),recovered:active.reduce((sum,row)=>sum+row.amount,0),outstanding:losses.reduce((sum,row)=>sum+row.outstanding,0),companyCharges:sources.reduce((sum,row)=>sum+row.company,0),companyAvailable:sources.reduce((sum,row)=>sum+row.companyAvailable,0)},canManage:(()=>{try{lcAdmin();return true;}catch{return false;}})()};}
+function lcAllocate(ledger,body,automatic=false){
+  const kind=body.kind==='income'?'income':'project',key=String(body.key||''),confirmation=ledger.confirmations.find(row=>row.kind===kind&&row.key===key&&lcValid(row,ledger));if(!confirmation)throw new InputError('Complete and confirm the source profit first. Project invoices must be fully paid and all direct costs recorded.');
+  const source=body.source==='distributable'?'distributable':'company',facts=lcFacts(kind,key,ledger),used=ledger.recoveries.filter(row=>!row.reversedAt&&row.kind===kind&&row.key===key&&row.source===source).reduce((sum,row)=>sum+row.amount,0),available=Math.max(0,(source==='company'?facts.company:facts.distributable)-used),view=lcView(ledger),outstanding=view.totals.outstanding;
+  let requested=automatic?0:lcMoney(body.amount);if(automatic){const policy=ledger.policy,profit=Math.max(0,facts.profit);requested=policy.mode==='fixed'?lcCents(policy.value):Math.round(profit*Number(policy.value)/100);requested=Math.min(requested,available,outstanding);}else if(requested>available||requested>outstanding)throw new InputError('Recovery exceeds available profit or the outstanding loss balance.');
+  if(requested<=0){if(automatic)return [];throw new InputError('Recovery must be greater than zero.');}
+  const requestId=String(body.requestId||'');if(!automatic&&!requestId)throw new InputError('A unique request reference is required.');if(ledger.recoveries.some(row=>row.requestId===requestId&&requestId))throw new InputError('This recovery request has already been processed.');
+  const batch=id(),created=[];let remaining=requested;const targets=body.lossId?view.losses.filter(row=>row.id===body.lossId):view.losses;if(body.lossId&&(!targets.length||targets[0].outstanding<remaining))throw new InputError('The selected loss does not have enough outstanding balance.');
+  for(const loss of targets){const value=Math.min(remaining,loss.outstanding);if(value<=0)continue;const row={id:id(),batch,requestId,confirmationId:confirmation.id,kind,key,invoiceIds:facts.invoices.map(item=>item.id),lossId:loss.id,source,amount:value,automatic,createdAt:now(),actor:currentTenant()?.actor?.userId};ledger.recoveries.push(row);created.push(row);remaining-=value;if(!remaining)break;}lcAudit(ledger,'recovery.allocated',batch);return created;
+}
+const lcPreviousApi=api;
+api=function(method,url,body={}){
+  const path=url.pathname;if(path.startsWith('/api/loss-coverage')){
+    const actor=currentTenant()?.actor;if(method==='GET'){if(!accessControl.can(actor,'profit','view'))throw Object.assign(new Error('Profit viewing permission is required.'),{status:403});return lcView(lcRead());}
+    lcAdmin();return inTransaction(()=>{const ledger=lcRead();lcReconcile(ledger);let result;
+      if(path==='/api/loss-coverage/losses'&&method==='POST'){const value=lcMoney(body.amount);if(!value)throw new InputError('Loss must be greater than zero.');const reason=required(body.reason,'Loss reason'),projectKey=String(body.projectKey||''),invoiceId=String(body.invoiceId||'');if(projectKey&&!one('SELECT project_key FROM projects WHERE project_key=?',projectKey))throw new InputError('Project not found.');if(invoiceId&&!one('SELECT id FROM invoices WHERE id=?',invoiceId))throw new InputError('Invoice not found.');if(projectKey&&invoiceId&&one('SELECT project_key FROM invoices WHERE id=?',invoiceId).project_key!==projectKey)throw new InputError('Invoice belongs to a different project.');const reference=required(body.requestId,'Request reference');if(ledger.losses.some(row=>row.requestId===reference))throw new InputError('This loss has already been recorded.');result={id:id(),requestId:reference,amount:value,reason,date:body.date||today(),projectKey,invoiceId,createdAt:now()};ledger.losses.push(result);lcAudit(ledger,'loss.recorded',result.id);}
+      else if(path==='/api/loss-coverage/policy'&&method==='PUT'){const value=Number(body.value);if(!['percentage','fixed'].includes(body.mode)||!['company','distributable'].includes(body.source)||!Number.isFinite(value)||value<0||body.mode==='percentage'&&value>100)throw new InputError('Enter a valid recovery policy.');ledger.policy={enabled:body.enabled===true,mode:body.mode,value,source:body.source};result=ledger.policy;lcAudit(ledger,'policy.updated','default');}
+      else if(path==='/api/loss-coverage/charges'&&method==='PUT'){const key=required(body.key,'Project'),value=Number(body.value);lcProjectFacts(key,ledger);if(!['fixed','percentage'].includes(body.mode)||!Number.isFinite(value)||value<0||body.mode==='percentage'&&value>100)throw new InputError('Enter valid company charges.');ledger.charges[key]={mode:body.mode,value};lcReconcile(ledger);result=ledger.charges[key];lcAudit(ledger,'charges.updated',key);}
+      else if(path==='/api/loss-coverage/income'&&method==='POST'){const reference=required(body.reference,'Income reference');if(ledger.incomes.some(row=>row.reference===reference))throw new InputError('This income reference already exists.');result={id:id(),reference,amount:lcMoney(body.amount),cost:lcMoney(body.cost||0),date:body.date||today(),createdAt:now()};ledger.incomes.push(result);lcAudit(ledger,'income.recorded',result.id);}
+      else if(path==='/api/loss-coverage/confirm'&&method==='POST'){const kind=body.kind==='income'?'income':'project',key=required(body.key,'Source'),facts=lcFacts(kind,key,ledger);if(!facts.fullyPaid||facts.missing||facts.profit<=0)throw new InputError('Confirm only profitable completed work with fully paid invoices and recorded costs.');if(ledger.confirmations.some(row=>row.kind===kind&&row.key===key&&lcValid(row,ledger)))throw new InputError('Profit is already confirmed.');const confirmation={id:id(),kind,key,signature:facts.signature,payments:facts.invoices.map(row=>({id:row.id,paid:row.paid})),at:now(),actor:currentTenant()?.actor?.userId};ledger.confirmations.push(confirmation);if(ledger.policy.enabled)lcAllocate(ledger,{kind,key,source:ledger.policy.source,requestId:'auto:'+confirmation.id},true);result=confirmation;lcAudit(ledger,'profit.confirmed',confirmation.id);}
+      else if(path==='/api/loss-coverage/manual-cover'&&method==='POST'){
+        const requestId=required(body.requestId,'Request reference'),lossId=required(body.lossId,'Loss');
+        if(ledger.recoveries.some(row=>row.manualRequestId===requestId))throw new InputError('This coverage has already been saved.');
+        if(!Array.isArray(body.contributions)||!body.contributions.length||body.contributions.length>50)throw new InputError('Select between one and 50 project or invoice contributions.');
+        const seen=new Set();result=[];ledger.policy.enabled=false;
+        for(const contribution of body.contributions){
+          const invoiceId=String(contribution.invoiceId||''),invoice=invoiceId?one('SELECT * FROM invoices WHERE id=?',invoiceId):null;
+          if(invoiceId&&!invoice)throw new InputError('Invoice not found.');
+          const key=invoice?invoice.project_key:required(contribution.projectKey,'Project');
+          if(!key||seen.has(key))throw new InputError('Use only one contribution per project in this coverage.');seen.add(key);
+          const facts=lcProjectFacts(key,ledger),amount=lcMoney(contribution.amount);
+          if(amount<=0||!facts.fullyPaid||facts.missing)throw new InputError('Enter a positive amount from fully paid work with recorded costs.');
+          const view=lcView(ledger),source=view.sources.find(row=>row.kind==='project'&&row.key===key),used=source.fromCompany+source.fromDistribution;
+          if(amount>Math.max(0,facts.profit-used))throw new InputError('Coverage exceeds the remaining project profit.');
+          if(invoice&&amount>Math.max(0,lcCents(profitInvoiceStats(invoice).sales-profitInvoiceStats(invoice).directCost)-facts.expenses-used))throw new InputError('Coverage exceeds the remaining profit available from this invoice.');
+          let confirmation=ledger.confirmations.find(row=>row.kind==='project'&&row.key===key&&lcValid(row,ledger));
+          if(!confirmation){confirmation={id:id(),kind:'project',key,signature:facts.signature,payments:facts.invoices.map(row=>({id:row.id,paid:row.paid})),at:now(),actor:currentTenant()?.actor?.userId};ledger.confirmations.push(confirmation);}
+          let remaining=amount;
+          for(const [pool,available] of [['company',source.companyAvailable],['distributable',source.distributionAvailable]]){
+            const value=Math.min(remaining,available);if(!value)continue;
+            const entries=lcAllocate(ledger,{kind:'project',key,source:pool,lossId,amount:value/100,requestId:requestId+':'+key+':'+pool});
+            for(const entry of entries){entry.manualRequestId=requestId;entry.selectedInvoiceId=invoiceId;entry.coverageDate=body.date||today();result.push(entry);}remaining-=value;
+          }
+        }
+        lcAudit(ledger,'loss.manually-covered',requestId);
+      }
+      else if(path==='/api/loss-coverage/recoveries'&&method==='POST')result=lcAllocate(ledger,body);
+      else if(path==='/api/loss-coverage/reverse'&&method==='POST'){const row=ledger.recoveries.find(item=>item.id===body.id);if(!row||row.reversedAt)throw new InputError('Active recovery not found.');row.reversedAt=now();row.reversalReason=required(body.reason,'Reversal reason');result=row;lcAudit(ledger,'recovery.reversed',row.id);}
+      else if(path==='/api/loss-coverage/income-void'&&method==='POST'){const row=ledger.incomes.find(item=>item.id===body.id&&!item.voidedAt);if(!row)throw new InputError('Income not found.');row.voidedAt=now();row.voidReason=required(body.reason,'Void reason');lcReconcile(ledger);result=row;lcAudit(ledger,'income.voided',row.id);}
+      else throw new InputError('Unknown loss coverage action.');lcSave(ledger);return {result,summary:lcView(ledger)};
+    });
+  }
+  const result=lcPreviousApi(method,url,body);if(['POST','PUT','DELETE'].includes(method)&&!path.startsWith('/api/backup')){const ledger=lcRead();if(ledger.recoveries.length){lcReconcile(ledger);lcSave(ledger);}}return result;
+};
+const lcPreviousScope=requiredScope;
+requiredScope=function(method,path,body){if(path.startsWith('/api/loss-coverage'))return null;return lcPreviousScope(method,path,body);};
+const lcPreviousBootstrap=bootstrap;
+bootstrap=function(){const result=lcPreviousBootstrap();if(accessControl.can(currentTenant()?.actor,'profit','view'))result.loss_coverage=lcView(lcRead());return result;};
+
+ // Repair intake is a separate, company-scoped non-stock ledger. It is used
+ // for goods received for repair or warranty work when the item is not an
+ // inventory product. Creating an intake never changes stock or invoice data.
+ const REPAIR_INTAKE_STATUSES=['received','under_inspection','repairing','ready','returned','closed','rejected'];
+ const repairText=(value,max=5000)=>String(value||'').trim().slice(0,max);
+ const repairWorkflowStages=value=>{let stages=[];try{stages=Array.isArray(value)?value:JSON.parse(String(value||'[]'));}catch{}const allowed=['goods_received','repair','inspection'];return [...new Set(stages.map(stage=>String(stage)).filter(stage=>allowed.includes(stage)))];};
+ function repairIntakeAdmin(){const tenant=currentTenant();accessControl.requireCompanyAdmin(tenant.actor,tenant.company.id);}
+ function repairSourceDetails(body){
+   const type=String(body.sourceDocumentType||'').trim(),sourceId=repairText(body.sourceDocumentId,180);
+   if(!type&&!sourceId)return {sourceType:'',sourceId:'',customerId:body.customerId||null,supplierId:body.supplierId||null};
+   if(!['quotation','proforma','invoice','purchase'].includes(type))throw new InputError('Choose a quotation, proforma invoice, final invoice or purchase as the linked source.');
+   if(!sourceId)throw new InputError('Choose the linked source document.');
+   const table=type==='invoice'?'invoices':type==='purchase'?'purchases':'quotations',source=one(`SELECT * FROM ${table} WHERE id=?`,sourceId);if(!source)throw new InputError('The selected source document was not found.');
+   return {sourceType:type,sourceId,customerId:source.customer_id||body.customerId||null,supplierId:source.supplier_id||body.supplierId||null};
+ }
+ function repairIntakeCreate(body){
+   const requestId=repairText(body.requestId,180),existing=requestId?one('SELECT * FROM repair_intakes WHERE request_id=?',requestId):null;if(existing)return existing;
+   const itemName=required(body.itemName,'Goods / item name'),faultDescription=required(body.faultDescription,'Fault / problem description'),receivedAt=repairText(body.receivedAt,80),receivedBy=required(body.receivedBy,'Received by');if(!receivedAt)throw new InputError('Received date and time are required.');
+   const intakeType=['repair_goods','warranty_intake'].includes(String(body.intakeType||''))?String(body.intakeType):'repair_goods',status=REPAIR_INTAKE_STATUSES.includes(String(body.status||''))?String(body.status):'received',stages=repairWorkflowStages(body.workflowStages||['goods_received']);if(!stages.length)throw new InputError('Select at least one process stage: goods received, repair or inspection.');
+    const repairAgentSupplierId=repairText(body.repairAgentSupplierId,180)||null;if(repairAgentSupplierId&&!one('SELECT id FROM suppliers WHERE id=?',repairAgentSupplierId))throw new InputError('The selected repair centre was not found in Suppliers.');
+    const source=repairSourceDetails(body),stamp=now(),intakeId=id(),intakeNumber=nextNumber('repair-intake','GRR'),companyId=one('SELECT id FROM companies WHERE is_default=1 LIMIT 1')?.id||'company-default';
+    run('INSERT INTO repair_intakes(id,intake_number,request_id,company_id,intake_type,status,source_document_type,source_document_id,customer_id,supplier_id,repair_agent_supplier_id,item_name,item_description,serial_number,fault_description,condition_on_receipt,accessories,received_at,received_by,received_contact,location,sent_for_repair_at,sent_for_repair_by,workflow_stages,inspection_notes,repair_notes,resolution,notes,created_by,created_at,updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',intakeId,intakeNumber,requestId,companyId,intakeType,status,source.sourceType,source.sourceId,source.customerId,source.supplierId,repairAgentSupplierId,itemName,repairText(body.itemDescription),repairText(body.serialNumber,180),faultDescription,repairText(body.conditionOnReceipt,1000),repairText(body.accessories,1000),receivedAt,receivedBy,repairText(body.receivedContact,80),repairText(body.location,240),repairText(body.sentForRepairAt,80),repairText(body.sentForRepairBy,160),JSON.stringify(stages),repairText(body.inspectionNotes),repairText(body.repairNotes),repairText(body.resolution,1000),repairText(body.notes),currentTenant()?.actor?.userId||'',stamp,stamp);
+   return one('SELECT * FROM repair_intakes WHERE id=?',intakeId);
+ }
+ function repairIntakeUpdate(intakeId,body){
+   const intake=one('SELECT * FROM repair_intakes WHERE id=?',intakeId);if(!intake)throw new InputError('Repair intake not found.');
+   const requestId=repairText(body.requestId,180),repeat=requestId&&requestId!==intake.request_id?one('SELECT * FROM repair_intakes WHERE request_id=?',requestId):null;if(repeat)return repeat;
+   const status=Object.prototype.hasOwnProperty.call(body,'status')?String(body.status||''):intake.status;if(!REPAIR_INTAKE_STATUSES.includes(status))throw new InputError('Choose a valid repair intake status.');
+   const stages=Object.prototype.hasOwnProperty.call(body,'workflowStages')?repairWorkflowStages(body.workflowStages):repairWorkflowStages(intake.workflow_stages);if(!stages.length)throw new InputError('Select at least one process stage.');
+    const repairAgentSupplierId=Object.prototype.hasOwnProperty.call(body,'repairAgentSupplierId')?repairText(body.repairAgentSupplierId,180)||null:intake.repair_agent_supplier_id||null;if(repairAgentSupplierId&&!one('SELECT id FROM suppliers WHERE id=?',repairAgentSupplierId))throw new InputError('The selected repair centre was not found in Suppliers.');
+    const stamp=now(),values=[status,repairText(body.receivedAt??intake.received_at,80),repairText(body.receivedBy??intake.received_by,160),repairText(body.receivedContact??intake.received_contact,80),repairText(body.location??intake.location,240),repairAgentSupplierId,repairText(body.sentForRepairAt??intake.sent_for_repair_at,80),repairText(body.sentForRepairBy??intake.sent_for_repair_by,160),JSON.stringify(stages),repairText(body.inspectionNotes??intake.inspection_notes),repairText(body.repairNotes??intake.repair_notes),repairText(body.resolution??intake.resolution,1000),repairText(body.notes??intake.notes),requestId||intake.request_id,stamp,intake.id];
+    run('UPDATE repair_intakes SET status=?,received_at=?,received_by=?,received_contact=?,location=?,repair_agent_supplier_id=?,sent_for_repair_at=?,sent_for_repair_by=?,workflow_stages=?,inspection_notes=?,repair_notes=?,resolution=?,notes=?,request_id=?,updated_at=? WHERE id=?',...values);return one('SELECT * FROM repair_intakes WHERE id=?',intake.id);
+ }
+ const repairPreviousApi=api;
+ api=function(method,url,body={}){
+   const path=url.pathname;
+   if(path.startsWith('/api/repair-intakes')){
+     if(method==='GET'){
+       if(path==='/api/repair-intakes')return q('SELECT * FROM repair_intakes ORDER BY received_at DESC,created_at DESC');
+       const intake=one('SELECT * FROM repair_intakes WHERE id=?',path.split('/').pop());if(!intake)throw new InputError('Repair intake not found.');return intake;
+     }
+     repairIntakeAdmin();
+     return inTransaction(()=>{if(method==='POST'&&path==='/api/repair-intakes')return repairIntakeCreate(body);if(method==='PUT'&&/^\/api\/repair-intakes\/[^/]+$/.test(path))return repairIntakeUpdate(path.split('/').pop(),body);throw new InputError('Unknown repair intake action.');});
+   }
+   return repairPreviousApi(method,url,body);
+ };
+
+ // Warranty claims are a separate, company-scoped service ledger. Creating a
+// claim never edits the original invoice, payment, or stock records. A
+// replacement consumes stock exactly once when the resolution is saved; a
+// refund and warranty service bill remain auditable settlement facts on the
+// claim itself.
+const WARRANTY_STATUSES=['opened','under_review','approved','repaired','replaced','refunded','rejected','closed'];
+const warrantyAmount=(value,label='Amount')=>{const number=Number(value||0);if(!Number.isFinite(number)||number<0||number>1e12)throw new InputError(label+' must be a valid non-negative amount.');return Math.round(number*100)/100;};
+const warrantyText=(value,max=2000)=>String(value||'').trim().slice(0,max);
+const warrantyWorkflowStages=value=>{let stages=[];try{stages=Array.isArray(value)?value:JSON.parse(String(value||'[]'));}catch{}const allowed=['goods_received','repair','inspection'];return [...new Set(stages.map(stage=>String(stage)).filter(stage=>allowed.includes(stage)))];};
+function warrantyAdmin(){const tenant=currentTenant();accessControl.requireCompanyAdmin(tenant.actor,tenant.company.id);}
+function warrantyClaimEvents(claimId){return q('SELECT * FROM warranty_claim_events WHERE claim_id=? ORDER BY created_at ASC,id ASC',claimId);}
+function warrantyAddEvent(claim,eventType,fromStatus,toStatus,amountValue,notes){run('INSERT INTO warranty_claim_events(id,claim_id,event_type,from_status,to_status,amount,notes,created_by,created_at) VALUES (?,?,?,?,?,?,?,?,?)',id(),claim.id,eventType,fromStatus||'',toStatus||'',warrantyAmount(amountValue||0),warrantyText(notes,4000),currentTenant()?.actor?.userId||'',now());}
+function warrantyInvoiceItem(invoiceId,itemId){return one('SELECT ii.*,i.number AS invoice_number,i.customer_id AS invoice_customer_id,i.invoice_date,i.status AS invoice_status FROM invoice_items ii JOIN invoices i ON i.id=ii.invoice_id WHERE ii.id=? AND ii.invoice_id=?',itemId,invoiceId);}
+function warrantyCreateClaim(body){
+  const requestId=warrantyText(body.requestId,180),existing=requestId?one('SELECT * FROM warranty_claims WHERE request_id=?',requestId):null;if(existing)return existing;
+  const sourceType=['quotation','proforma','invoice'].includes(String(body.sourceDocumentType||''))?String(body.sourceDocumentType):'invoice',sourceId=required(body.sourceDocumentId||body.invoiceId,'Source document');
+  let invoiceId=sourceType==='invoice'?sourceId:'';
+  if(sourceType!=='invoice'){const source=one('SELECT * FROM quotations WHERE id=?',sourceId);if(!source)throw new InputError('The selected quotation or proforma invoice was not found.');invoiceId=source.invoice_id||'';if(!invoiceId)throw new InputError('Convert the selected quotation or proforma invoice to a final invoice before starting a warranty claim.');}
+  const invoice=one('SELECT * FROM invoices WHERE id=?',invoiceId);if(!invoice)throw new InputError('Final invoice not found.');
+  const itemId=required(body.invoiceItemId,'Invoice product'),item=warrantyInvoiceItem(invoiceId,itemId);if(!item)throw new InputError('The selected product is not on that invoice.');
+  if(item.item_type!=='product'||!item.product_id)throw new InputError('Warranty claims can only be started for an invoiced inventory product.');
+  const claimQuantity=quantity(body.claimQuantity??1);if(claimQuantity>Number(item.quantity)+0.000001)throw new InputError('Claim quantity cannot exceed the invoiced quantity.');
+  const claimed=Number(one("SELECT COALESCE(SUM(claim_quantity),0) AS quantity FROM warranty_claims WHERE invoice_item_id=? AND status<>'rejected'",itemId)?.quantity||0);if(claimed+claimQuantity>Number(item.quantity)+0.000001)throw new InputError('The invoiced quantity has already been covered by existing warranty claims.');
+  const workflowStages=warrantyWorkflowStages(body.workflowStages);if(!workflowStages.length)throw new InputError('Select at least one process stage: goods received, repair or inspection.');
+  const goodsReceivedAt=String(body.goodsReceivedAt||'').trim(),goodsReceivedBy=warrantyText(body.goodsReceivedBy,160),goodsReceivedContact=warrantyText(body.goodsReceivedContact,80);if(workflowStages.includes('goods_received')&&(!goodsReceivedAt||!goodsReceivedBy))throw new InputError('Goods received date/time and received by are required when that stage is selected.');
+  const issue=required(body.issue,'Warranty issue'),claimId=id(),claimNumber=nextNumber('warranty-claim','WCL'),stamp=now(),values=[claimId,claimNumber,requestId,invoice.id,item.id,invoice.customer_id,item.product_id,claimQuantity,String(body.claimDate||today()),String(body.warrantyUntil||''),issue,warrantyText(body.notes,5000),'opened',warrantyAmount(body.serviceBillAmount,'Warranty service bill'),warrantyText(body.serviceBillReference,180),String(body.serviceBillDate||''),'','',null,0,'',0,'','','',sourceType,sourceId,JSON.stringify(workflowStages),goodsReceivedAt,goodsReceivedBy,goodsReceivedContact,warrantyText(body.inspectionNotes,5000),warrantyText(body.repairNotes,5000),'',currentTenant()?.actor?.userId||'',stamp,stamp];
+  run('INSERT INTO warranty_claims(id,claim_number,request_id,invoice_id,invoice_item_id,customer_id,product_id,claim_quantity,claim_date,warranty_until,issue,notes,status,service_bill_amount,service_bill_reference,service_bill_date,resolution_type,resolution_date,replacement_product_id,replacement_quantity,replacement_movement_id,refund_amount,refund_method,refund_reference,refund_date,source_document_type,source_document_id,workflow_stages,goods_received_at,goods_received_by,goods_received_contact,inspection_notes,repair_notes,resolution_request_id,created_by,created_at,updated_at) VALUES ('+values.map(()=>'?').join(',')+')',...values);
+  const claim=one('SELECT * FROM warranty_claims WHERE id=?',claimId);warrantyAddEvent(claim,'claim_opened','','opened',0,issue);return claim;
+}
+function warrantyDeductReplacementStock(claim,productId,quantityValue){
+  const product=one('SELECT * FROM products WHERE id=?',productId);if(!product)throw new InputError('Replacement product not found.');const quantityNumber=quantity(quantityValue);if(product.id!==claim.product_id)throw new InputError('Replacement must use the same invoiced product.');if(Number(product.quantity)<quantityNumber)throw new InputError(`Not enough ${product.name} in stock for this replacement.`);
+  const movementId=id(),stamp=now(),next=Number(product.quantity)-quantityNumber;run('UPDATE products SET quantity=?,updated_at=? WHERE id=?',next,stamp,product.id);run('INSERT INTO stock_movements(id,product_id,movement_type,quantity,unit_cost,reference,notes,movement_date,created_at) VALUES (?,?,?,?,?,?,?,?,?)',movementId,product.id,'Warranty replacement',-quantityNumber,product.purchase_price,claim.claim_number,'Replacement issued against warranty claim',today(),stamp);return movementId;
+}
+function warrantyUpdateClaim(claimId,body){
+  const claim=one('SELECT * FROM warranty_claims WHERE id=?',claimId);if(!claim)throw new InputError('Warranty claim not found.');
+  const requestId=warrantyText(body.requestId,180),repeat=requestId?one('SELECT * FROM warranty_claims WHERE resolution_request_id=?',requestId):null;if(repeat)return repeat;
+  if(claim.status==='closed')throw new InputError('A closed warranty claim cannot be changed.');
+  const status=String(body.status||claim.status);if(!WARRANTY_STATUSES.includes(status))throw new InputError('Choose a valid warranty claim status.');
+  if(status==='closed'&&!['repaired','replaced','refunded','rejected'].includes(claim.status))throw new InputError('Complete the repair, replacement, refund or rejection before closing the claim.');
+  const item=one('SELECT * FROM invoice_items WHERE id=?',claim.invoice_item_id);if(!item)throw new InputError('The original invoice product no longer exists.');
+  let serviceBill=Object.prototype.hasOwnProperty.call(body,'serviceBillAmount')?warrantyAmount(body.serviceBillAmount,'Warranty service bill'):Number(claim.service_bill_amount||0),serviceReference=Object.prototype.hasOwnProperty.call(body,'serviceBillReference')?warrantyText(body.serviceBillReference,180):claim.service_bill_reference||'',serviceDate=Object.prototype.hasOwnProperty.call(body,'serviceBillDate')?String(body.serviceBillDate||''):claim.service_bill_date||'';
+  let resolutionType=claim.resolution_type||'',resolutionDate=claim.resolution_date||'',replacementProductId=claim.replacement_product_id||null,replacementQuantity=Number(claim.replacement_quantity||0),replacementMovementId=claim.replacement_movement_id||'',refundAmount=Number(claim.refund_amount||0),refundMethod=claim.refund_method||'',refundReference=claim.refund_reference||'',refundDate=claim.refund_date||'';
+  if(status==='repaired'){resolutionType='repair';resolutionDate=String(body.resolutionDate||today());}
+  if(status==='replaced'){
+    resolutionType='replacement';resolutionDate=String(body.resolutionDate||today());replacementProductId=String(body.replacementProductId||claim.product_id);replacementQuantity=quantity(body.replacementQuantity??claim.claim_quantity);if(replacementProductId!==claim.product_id)throw new InputError('Replacement must use the same invoiced product.');if(replacementQuantity>Number(claim.claim_quantity)+0.000001)throw new InputError('Replacement quantity cannot exceed the claim quantity.');if(!replacementMovementId)replacementMovementId=warrantyDeductReplacementStock(claim,replacementProductId,replacementQuantity);
+  }
+  if(status==='refunded'){
+    resolutionType='refund';resolutionDate=String(body.resolutionDate||today());refundAmount=Object.prototype.hasOwnProperty.call(body,'refundAmount')?warrantyAmount(body.refundAmount,'Refund amount'):refundAmount;if(refundAmount<=0)throw new InputError('Enter the refund amount.');const maxRefund=Math.round(Number(item.line_total||0)*(Number(claim.claim_quantity)/Math.max(Number(item.quantity),0.000001)*100))/100;if(refundAmount>maxRefund+0.005)throw new InputError('Refund cannot exceed the selected invoiced line value.');refundMethod=warrantyText(body.refundMethod,80);refundReference=warrantyText(body.refundReference,180);refundDate=String(body.refundDate||today());
+  }
+  const notes=Object.prototype.hasOwnProperty.call(body,'notes')?warrantyText(body.notes,5000):claim.notes||'',workflowStages=Object.prototype.hasOwnProperty.call(body,'workflowStages')?warrantyWorkflowStages(body.workflowStages):warrantyWorkflowStages(claim.workflow_stages),goodsReceivedAt=Object.prototype.hasOwnProperty.call(body,'goodsReceivedAt')?String(body.goodsReceivedAt||''):claim.goods_received_at||'',goodsReceivedBy=Object.prototype.hasOwnProperty.call(body,'goodsReceivedBy')?warrantyText(body.goodsReceivedBy,160):claim.goods_received_by||'',goodsReceivedContact=Object.prototype.hasOwnProperty.call(body,'goodsReceivedContact')?warrantyText(body.goodsReceivedContact,80):claim.goods_received_contact||'',inspectionNotes=Object.prototype.hasOwnProperty.call(body,'inspectionNotes')?warrantyText(body.inspectionNotes,5000):claim.inspection_notes||'',repairNotes=Object.prototype.hasOwnProperty.call(body,'repairNotes')?warrantyText(body.repairNotes,5000):claim.repair_notes||'';if(!workflowStages.length)throw new InputError('Select at least one process stage.');if(workflowStages.includes('goods_received')&&(!goodsReceivedAt||!goodsReceivedBy))throw new InputError('Goods received date/time and received by are required when that stage is selected.');const stamp=now();run('UPDATE warranty_claims SET status=?,notes=?,service_bill_amount=?,service_bill_reference=?,service_bill_date=?,resolution_type=?,resolution_date=?,replacement_product_id=?,replacement_quantity=?,replacement_movement_id=?,refund_amount=?,refund_method=?,refund_reference=?,refund_date=?,workflow_stages=?,goods_received_at=?,goods_received_by=?,goods_received_contact=?,inspection_notes=?,repair_notes=?,resolution_request_id=?,updated_at=? WHERE id=?',status,notes,serviceBill,serviceReference,serviceDate,resolutionType,resolutionDate,replacementProductId,replacementQuantity,replacementMovementId,refundAmount,refundMethod,refundReference,refundDate,JSON.stringify(workflowStages),goodsReceivedAt,goodsReceivedBy,goodsReceivedContact,inspectionNotes,repairNotes,requestId,stamp,claim.id);
+  const saved=one('SELECT * FROM warranty_claims WHERE id=?',claim.id);if(status!==claim.status)warrantyAddEvent(saved,'status_changed',claim.status,status,status==='refunded'?refundAmount:status==='replaced'?replacementQuantity:serviceBill,body.eventNotes||notes);else if(serviceBill!==Number(claim.service_bill_amount||0))warrantyAddEvent(saved,'service_bill_recorded',claim.status,claim.status,serviceBill,serviceReference);return saved;
+}
+const warrantyPreviousApi=api;
+api=function(method,url,body={}){
+  const path=url.pathname;
+  if(path.startsWith('/api/warranty-claims')){
+    const actor=currentTenant()?.actor;
+    if(method==='GET'){
+      if(path==='/api/warranty-claims')return {claims:q('SELECT * FROM warranty_claims ORDER BY claim_date DESC,created_at DESC'),events:q('SELECT * FROM warranty_claim_events ORDER BY created_at ASC,id ASC')};
+      const claim=one('SELECT * FROM warranty_claims WHERE id=?',path.split('/').pop());if(!claim)throw new InputError('Warranty claim not found.');return {...claim,events:warrantyClaimEvents(claim.id)};
+    }
+    warrantyAdmin();
+    return inTransaction(()=>{
+      if(method==='POST'&&path==='/api/warranty-claims')return warrantyCreateClaim(body);
+      if(method==='PUT'&&/^\/api\/warranty-claims\/[^/]+$/.test(path))return warrantyUpdateClaim(path.split('/').pop(),body);
+      throw new InputError('Unknown warranty claim action.');
+    });
+  }
+  return warrantyPreviousApi(method,url,body);
+};
+const warrantyPreviousScope=requiredScope;
+requiredScope=function(method,path,body){if(path.startsWith('/api/warranty-claims'))return {scope:'warranty_claims',action:method==='GET'?'view':method==='PUT'?'edit':'create'};return warrantyPreviousScope(method,path,body);};
+const warrantyPreviousBootstrap=bootstrap;
+bootstrap=function(){const result=warrantyPreviousBootstrap();result.warranty_claims=q('SELECT * FROM warranty_claims ORDER BY claim_date DESC,created_at DESC');result.warranty_claim_events=q('SELECT * FROM warranty_claim_events ORDER BY created_at ASC,id ASC');return result;};
+const warrantyPreviousFilterBootstrap=filterBootstrap;
+filterBootstrap=function(snapshot,access,actor){const visible=warrantyPreviousFilterBootstrap(snapshot,access,actor);if(!access.can(actor,'warranty_claims','view')){visible.warranty_claims=[];visible.warranty_claim_events=[];}return visible;};
 
 ;// ./android/runtime/entry.mjs
 

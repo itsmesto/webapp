@@ -4,7 +4,10 @@ import android.app.Activity;
 import android.content.ActivityNotFoundException;
 import android.content.ClipData;
 import android.content.Intent;
+import android.content.pm.PackageManager;
+import android.content.pm.ResolveInfo;
 import android.graphics.Color;
+import android.graphics.Bitmap;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
@@ -38,6 +41,7 @@ import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.OutputStream;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
@@ -46,12 +50,16 @@ import java.util.concurrent.Executors;
 /** The Android host. The complete business application is bundled in assets and uses the native bridge for storage. */
 public final class MainActivity extends Activity {
     private static final int FOLDER=41, BACKUP=42, PDF=43, IMPORT=44, FILE=45;
-    // Shared-host mode uses the HTTPS workspace directly. This keeps the Android
-    // page and the hosted API same-origin, so login cookies work even when the
-    // hosting panel has not yet been configured with an Android CORS origin.
-    private static final String HOSTED_URL="https://api.primeenergy.lk/";
-    private static final String HOSTED_HOST="api.primeenergy.lk";
+    // Start online against the real account so existing users can sign in and
+    // see their hosted data. Do not silently open the bundled first-time setup
+    // screen when the hosted login is temporarily unavailable.
+    private static final String LOCAL_URL="file:///android_asset/business/index.html";
+    private static final String HOSTED_URL="https://itsmesto.lk/";
+    private static final String HOSTED_HOST="itsmesto.lk";
+    private static final String LEGACY_HOSTED_HOST="api.primeenergy.lk";
     private WebView web; private NativeStorage storage; private ValueCallback<Uri[]> picker;
+    private boolean hostedPageLoaded;
+    private int hostedNavigation;
     private int hostedLoadAttempts;
     private final Handler main=new Handler(Looper.getMainLooper());
     private final ExecutorService worker=Executors.newSingleThreadExecutor(r->{Thread t=new Thread(r,"invoicey-worker");t.setDaemon(true);return t;});
@@ -115,27 +123,41 @@ public final class MainActivity extends Activity {
         private boolean internal(Uri uri){
             String scheme=uri.getScheme();
             if("file".equalsIgnoreCase(scheme)||"about".equalsIgnoreCase(scheme))return true;
-            return "https".equalsIgnoreCase(scheme)&&HOSTED_HOST.equalsIgnoreCase(uri.getHost());
+            return "https".equalsIgnoreCase(scheme)&&(HOSTED_HOST.equalsIgnoreCase(uri.getHost())||LEGACY_HOSTED_HOST.equalsIgnoreCase(uri.getHost()));
         }
         private boolean external(Uri uri){String scheme=uri.getScheme();if("file".equalsIgnoreCase(scheme)||"about".equalsIgnoreCase(scheme))return false;try{startActivity(new Intent(Intent.ACTION_VIEW,uri));}catch(ActivityNotFoundException e){Toast.makeText(MainActivity.this,"No app can open that link.",Toast.LENGTH_SHORT).show();}return true;}
-        private boolean isHosted(Uri uri){return uri!=null&&"https".equalsIgnoreCase(uri.getScheme())&&HOSTED_HOST.equalsIgnoreCase(uri.getHost());}
+        private boolean isHosted(Uri uri){return uri!=null&&"https".equalsIgnoreCase(uri.getScheme())&&(HOSTED_HOST.equalsIgnoreCase(uri.getHost())||LEGACY_HOSTED_HOST.equalsIgnoreCase(uri.getHost()));}
         @Override public boolean shouldOverrideUrlLoading(WebView v,WebResourceRequest r){Uri uri=r.getUrl();return internal(uri)?false:external(uri);}
         @Override public boolean shouldOverrideUrlLoading(WebView v,String u){Uri uri=Uri.parse(u);return internal(uri)?false:external(uri);}
-        @Override public void onReceivedError(WebView v,WebResourceRequest request,WebResourceError error){super.onReceivedError(v,request,error);if(request.isForMainFrame()&&isHosted(request.getUrl()))retryHostedWorkspace();}
-        @Override public void onReceivedError(WebView v,int errorCode,String description,String failingUrl){super.onReceivedError(v,errorCode,description,failingUrl);try{if(isHosted(Uri.parse(failingUrl)))retryHostedWorkspace();}catch(Exception ignored){}}
-        @Override public void onPageFinished(WebView v,String url){super.onPageFinished(v,url);if(internal(Uri.parse(url))&&HOSTED_HOST.equalsIgnoreCase(Uri.parse(url).getHost()))installHostedAndroidBridge(v);}
+        @Override public void onReceivedError(WebView v,WebResourceRequest request,WebResourceError error){super.onReceivedError(v,request,error);android.util.Log.w("InvoiceyWeb","Load error: "+request.getUrl()+" / "+error.getDescription());if(request.isForMainFrame()&&isHosted(request.getUrl()))retryHostedWorkspace();}
+        @Override public void onReceivedError(WebView v,int errorCode,String description,String failingUrl){super.onReceivedError(v,errorCode,description,failingUrl);android.util.Log.w("InvoiceyWeb","Load error: "+failingUrl+" / "+description);try{if(isHosted(Uri.parse(failingUrl)))retryHostedWorkspace();}catch(Exception ignored){}}
+        @Override public void onPageStarted(WebView v,String url,Bitmap favicon){super.onPageStarted(v,url,favicon);android.util.Log.i("InvoiceyWeb","Page started: "+url);}
+        @Override public void onPageFinished(WebView v,String url){super.onPageFinished(v,url);android.util.Log.i("InvoiceyWeb","Page finished: "+url);try{if(isHosted(Uri.parse(url))){hostedPageLoaded=true;hostedLoadAttempts=0;installHostedAndroidBridge(v);}}catch(Exception ignored){}}
     }
     /** Android WebView can retain a failed first navigation as ERR_CACHE_MISS. Retry the
      * hosted page with a short cache-busting query so the login screen is not replaced
      * by the WebView's generic network error page. */
-    private void loadHostedWorkspace(){
-        String url=HOSTED_URL+"?android=1&build=31500&load="+System.currentTimeMillis();
-        web.loadUrl(url);
+    private void loadLocalWorkspace(){
+        hostedNavigation++;
+        web.loadUrl(LOCAL_URL+"?android=1&mode=offline-first&build=31900");
     }
     private void retryHostedWorkspace(){
-        if(hostedLoadAttempts>=2)return;
+        // Keep retrying the hosted login rather than opening local first-time
+        // setup. Local setup would make the user believe hosted records had
+        // disappeared.
+        if(hostedLoadAttempts>=2){hostedLoadAttempts=0;main.postDelayed(this::loadHostedWorkspace,1500L);return;}
         hostedLoadAttempts++;
         main.postDelayed(this::loadHostedWorkspace,350L);
+    }
+    private void loadHostedWorkspace(){
+        hostedPageLoaded=false;
+        final int navigation=++hostedNavigation;
+        String url=HOSTED_URL+"?android=1&build=31527&load="+System.currentTimeMillis();
+        web.loadUrl(url);
+        // A WebView network navigation can remain pending without calling an
+        // error callback. Retry the hosted login instead of switching to local
+        // first-time setup, which would create an unrelated empty workspace.
+        main.postDelayed(()->{if(web!=null&&!hostedPageLoaded&&hostedNavigation==navigation)retryHostedWorkspace();},8000L);
     }
     /** Expose Android save/share/backup actions to the hosted page after it loads. */
     private void installHostedAndroidBridge(WebView view){
@@ -205,7 +227,30 @@ public final class MainActivity extends Activity {
         }
         @Override public void onFinish(){if(file!=null)file.delete();}
     }
-    private void sharePdf(File file,String name,String id){main.post(()->{try{File dir=new File(getCacheDir(),"share");if(!dir.exists()&&!dir.mkdirs())throw new java.io.IOException("The share folder could not be created.");String pdfName=name.toLowerCase().endsWith(".pdf")?name:name+".pdf";File target=new File(dir,pdfName);java.nio.file.Files.copy(file.toPath(),target.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);Uri uri=Uri.parse("content://"+getPackageName()+".exports/"+Uri.encode(target.getName()));Intent send=new Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM,uri);send.setClipData(ClipData.newRawUri("PDF",uri));send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);if(send.resolveActivity(getPackageManager())==null)throw new ActivityNotFoundException("No installed app can share PDF files.");startActivity(Intent.createChooser(send,"Share PDF"));resolve(id,true,"",new JSONObject().put("shared",true));}catch(Exception error){resolve(id,false,error.getMessage(),null);}finally{if(file!=null)file.delete();}});}
+    private void sharePdf(File file,String name,String id){main.post(()->{try{
+        if(file==null||!file.isFile()||file.length()==0)throw new java.io.IOException("The PDF could not be created.");
+        File dir=new File(getCacheDir(),"share");if(!dir.exists()&&!dir.mkdirs())throw new java.io.IOException("The share folder could not be created.");
+        String pdfName=name.toLowerCase().endsWith(".pdf")?name:name+".pdf";File target=new File(dir,pdfName);
+        java.nio.file.Files.copy(file.toPath(),target.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        if(!target.isFile()||target.length()==0)throw new java.io.IOException("The PDF could not be prepared for sharing.");
+        Uri uri=new Uri.Builder().scheme("content").authority(getPackageName()+".exports").appendPath(target.getName()).build();
+        try(InputStream check=getContentResolver().openInputStream(uri)){
+            byte[] signature=new byte[5];if(check==null||check.read(signature)!=signature.length||!"%PDF-".equals(new String(signature,java.nio.charset.StandardCharsets.US_ASCII)))throw new java.io.IOException("The prepared file is not a readable PDF.");
+        }
+        Intent send=new Intent(Intent.ACTION_SEND).setType("application/pdf").putExtra(Intent.EXTRA_STREAM,uri);
+        send.setClipData(ClipData.newUri(getContentResolver(),pdfName,uri));send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        List<ResolveInfo> targets=getPackageManager().queryIntentActivities(send,PackageManager.MATCH_DEFAULT_ONLY);
+        if(targets.isEmpty())throw new ActivityNotFoundException("No installed app can share PDF files.");
+        // Direct Share shortcuts may start the destination without going through the
+        // normal chooser grant path. Grant read-only access to the apps that can receive
+        // this PDF; the share URI is scoped to this one cached file.
+        for(ResolveInfo targetInfo:targets){if(targetInfo.activityInfo!=null)grantUriPermission(targetInfo.activityInfo.packageName,uri,Intent.FLAG_GRANT_READ_URI_PERMISSION);}
+        Intent chooser=Intent.createChooser(send,"Share PDF");
+        // Some Android Sharesheet direct-contact targets launch through the chooser rather
+        // than the send intent. Put the same URI grant on both intents for those targets.
+        chooser.setClipData(ClipData.newUri(getContentResolver(),pdfName,uri));chooser.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+        startActivity(chooser);resolve(id,true,"",new JSONObject().put("shared",true));
+    }catch(Exception error){resolve(id,false,error.getMessage(),null);}finally{if(file!=null)file.delete();}});}
     private JSONObject jsonValue(String key,Object value){try{return new JSONObject().put(key,value);}catch(Exception ignored){return new JSONObject();}}
     private void share(File file,String mime){main.post(()->{try{File dir=new File(getCacheDir(),"share");dir.mkdirs();File target=new File(dir,file.getName());java.nio.file.Files.copy(file.toPath(),target.toPath(),java.nio.file.StandardCopyOption.REPLACE_EXISTING);Uri uri=Uri.parse("content://"+getPackageName()+".exports/"+Uri.encode(target.getName()));Intent send=new Intent(Intent.ACTION_SEND).setType(mime).putExtra(Intent.EXTRA_STREAM,uri).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);startActivity(Intent.createChooser(send,"Share workspace backup"));}catch(Exception e){Toast.makeText(this,e.getMessage(),Toast.LENGTH_LONG).show();}});}
 
