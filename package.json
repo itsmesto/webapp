@@ -1,0 +1,74 @@
+{
+  "name": "ledgerly-business-operations",
+  "productName": "itsme invoicey",
+  "version": "2.0.1",
+  "private": true,
+  "type": "module",
+  "main": "desktop/main.cjs",
+  "description": "itsme invoicey: invoices, quotations, inventory, expenses, payments and private per-company account backups.",
+  "author": "Mr. Dhameera Idumal",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node hosting/server.mjs",
+    "hosted:api": "node hosting/server.mjs",
+    "desktop:start": "electron .",
+    "desktop:package": "electron-builder --dir --win --x64",
+    "desktop:make": "electron-builder --win nsis --x64"
+  },
+  "devDependencies": {
+    "@electron-forge/cli": "^7.11.2",
+    "@electron-forge/maker-squirrel": "^7.11.2",
+    "electron": "^44.5.1",
+    "electron-builder": "^26.15.3"
+  },
+  "build": {
+    "appId": "com.itsme.invoicey.desktop",
+    "productName": "itsme invoicey",
+    "executableName": "itsme-invoicey",
+    "artifactName": "itsme-invoicey-Setup-${version}.${ext}",
+    "directories": {
+      "output": "out/installer"
+    },
+    "files": [
+      "server.mjs",
+      "server/**/*",
+      "database/**/*",
+      "public/**/*",
+      "desktop/**/*",
+      "package.json",
+      "!**/*.sqlite*",
+      "!**/*.log"
+    ],
+    "asar": false,
+    "win": {
+      "icon": "desktop/invoicey.ico",
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "artifactName": "itsme-invoicey-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "allowElevation": true,
+      "perMachine": false,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "itsme invoicey",
+      "uninstallDisplayName": "itsme invoicey",
+      "deleteAppDataOnUninstall": false,
+      "runAfterFinish": true
+    }
+  },
+  "dependencies": {
+    "nodemailer": "^10.1.0"
+  }
+}
+
