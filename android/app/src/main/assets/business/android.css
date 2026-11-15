@@ -1,0 +1,343 @@
+/* Phone presentation only. The document print stylesheet remains the A4 authority. */
+@media screen {
+  html.invoicey-android {
+    --font: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --display: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --android-viewport-height: 100dvh;
+    --android-keyboard-height: 0px;
+    --android-system-top: 0px;
+    --android-system-bottom: 0px;
+    scroll-behavior: auto;
+  }
+  .invoicey-android body { font-size: 14px; overscroll-behavior-y: contain; }
+  .invoicey-android button, .invoicey-android a, .invoicey-android input,
+  .invoicey-android select, .invoicey-android textarea { touch-action: manipulation; }
+  .invoicey-android .brand-mark { width: 40px; height: 40px; border-radius: 50%; background: #000; padding: 0; overflow: hidden; flex: none; }
+  .invoicey-android .brand-mark > span { display: none; }
+  .invoicey-android .brand-mark img { display: block; width: 100%; height: 100%; object-fit: contain; }
+  .invoicey-android .access-brand { margin-bottom: 23px; }
+  .invoicey-android .access-brand > strong { font-size: 23px; }
+  .invoicey-android .app-shell, .invoicey-android .main-area { min-height: 100dvh; }
+  .invoicey-android .sidebar { padding-top: max(18px, env(safe-area-inset-top)); padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+  .invoicey-android .primary-nav { min-height: 0; flex: 1; scrollbar-width: thin; }
+  .invoicey-android .nav-item { min-height: 46px; height: auto; padding-top: 10px; padding-bottom: 10px; font-size: 14px; }
+  .invoicey-android .nav-icon, .invoicey-android .nav-icon svg { width: 20px; height: 20px; flex: none; }
+  .invoicey-android .nav-label { font-size: 10px; margin-top: 12px; }
+  .invoicey-android .brand { padding-bottom: 17px; }
+  .invoicey-android .brand-name { font-size: 23px; letter-spacing: -.8px; }
+  .invoicey-android .workspace-switcher { min-height: 63px; margin-bottom: 12px; }
+  .invoicey-android .workspace-meta strong { font-size: 13px; }
+  .invoicey-android .workspace-meta small { font-size: 11px; }
+  .invoicey-android .profile-row strong { font-size: 12px; }
+  .invoicey-android .profile-row small { font-size: 11px; }
+  .invoicey-android .sidebar-bottom { flex: none; }
+  .invoicey-android .help-card { display: none; }
+  .invoicey-android .settings-link { margin: 5px 0; }
+  .invoicey-android .android-about-button { display: flex; align-items: center; gap: 8px; min-height: 44px; width: 100%; border: 0; background: transparent; padding: 10px 11px; color: var(--muted); font-size: 12px; text-align: left; cursor: pointer; }
+  .invoicey-android .android-nav-scrim { position: fixed; inset: 0; z-index: 19; background: rgba(10, 24, 20, .48); border: 0; }
+  .invoicey-android .button, .invoicey-android .button.small { min-height: 44px; padding: 8px 13px; font-size: 13px; }
+  .invoicey-android .icon-button, .invoicey-android .menu-button, .invoicey-android .close-button,
+  .invoicey-android .row-action, .invoicey-android .remove-line { min-width: 44px; min-height: 44px; }
+  .invoicey-android .row-action { font-size: 20px; }
+  .invoicey-android .close-button { font-size: 25px; flex: none; }
+  .invoicey-android .theme-toggle { min-width: 44px; min-height: 44px; }
+  .invoicey-android .theme-icon { font-size: 20px; }
+  .invoicey-android .auth-link { min-height: 44px; padding: 10px; font-size: 13px; margin-top: 8px; }
+  .invoicey-android .form-field label, .invoicey-android .auth-fields > label,
+  .invoicey-android .auth-admin-block > label, .invoicey-android .access-card form > label { font-size: 13px; line-height: 1.45; }
+  .invoicey-android .form-field input, .invoicey-android .form-field select,
+  .invoicey-android .form-field textarea, .invoicey-android .access-card input,
+  .invoicey-android .access-card textarea { min-height: 46px; height: auto; padding: 11px 12px; font-size: 16px; }
+  .invoicey-android .form-field textarea { min-height: 92px; }
+  .invoicey-android .field-hint, .invoicey-android .helper-caption { font-size: 11px; line-height: 1.5; }
+  .invoicey-android .form-error, .invoicey-android .auth-error { font-size: 13px; line-height: 1.5; }
+  .invoicey-android .access-intro { font-size: 14px; }
+  .invoicey-android .auth-footnote, .invoicey-android .help-note, .invoicey-android .inline-note { font-size: 12px; line-height: 1.6; }
+  .invoicey-android .access-theme-toggle { top: max(8px, env(safe-area-inset-top)); right: 12px; }
+  .invoicey-android #accessRoot { height: var(--android-viewport-height); padding-top: max(66px, env(safe-area-inset-top)); padding-bottom: calc(max(48px, env(safe-area-inset-bottom)) + var(--android-system-bottom) + var(--android-keyboard-height) + 24px); overscroll-behavior: contain; }
+  .invoicey-android .modal-backdrop { height: var(--android-viewport-height); padding-bottom: var(--android-system-bottom); box-sizing: border-box; backdrop-filter: none; overscroll-behavior: contain; }
+  .invoicey-android .modal { max-height: calc(var(--android-viewport-height) - var(--android-system-bottom) - 14px); }
+  .invoicey-android .modal-head h2 { font-size: 18px; }
+  .invoicey-android .modal-head p { font-size: 12px; line-height: 1.5; }
+  .invoicey-android .modal-head { align-items: center; gap: 9px; }
+  .invoicey-android .modal-body { overscroll-behavior: contain; scroll-padding-top: 12px; scroll-padding-bottom: calc(24px + var(--android-system-bottom)); }
+  .invoicey-android .modal-footer { padding-bottom: calc(max(12px, env(safe-area-inset-bottom)) + var(--android-system-bottom)); }
+  .invoicey-android .required-note { font-size: 10px; }
+  .invoicey-android .mini-search input, .invoicey-android .toolbar .mini-search input,
+  .invoicey-android .filter-select, .invoicey-android .select-inline,
+  .invoicey-android .report-date-range input { min-height: 44px; font-size: 14px; }
+  .invoicey-android .mini-search span { top: 14px; }
+  .invoicey-android .data-table th { font-size: 10px; min-height: 38px; }
+  .invoicey-android .data-table td { font-size: 13px; height: 58px; padding-top: 7px; padding-bottom: 7px; }
+  .invoicey-android .table-secondary { font-size: 11px; }
+  .invoicey-android .table-scroll { overscroll-behavior-x: contain; scrollbar-width: thin; }
+  .invoicey-android .android-table-hint { margin: 0; padding: 7px 12px; background: var(--surface); border-bottom: 1px solid var(--line); font-size: 11px; color: var(--muted); }
+  .invoicey-android .status-pill { font-size: 11px; }
+  .invoicey-android .record-count, .invoicey-android .table-meta { font-size: 11px; }
+  .invoicey-android .tab-button, .invoicey-android .project-tab, .invoicey-android .period-button { min-height: 44px; font-size: 13px; }
+  .invoicey-android .tab-row, .invoicey-android .project-tabs { overflow-x: auto; flex-wrap: nowrap; gap: 14px; }
+  .invoicey-android .tab-button, .invoicey-android .project-tab { white-space: nowrap; flex: none; }
+  .invoicey-android .tab-row { height: 51px; }
+  .invoicey-android .company-switch-choice { min-height: 64px; }
+  .invoicey-android .company-switch-choice strong { font-size: 14px; }
+  .invoicey-android .company-switch-choice span { font-size: 11px; }
+  .invoicey-android .permission-scope label { display: inline-flex; align-items: center; min-height: 40px; font-size: 12px; gap: 5px; }
+  .invoicey-android .permission-scope input, .invoicey-android .module-toggle input { width: 20px; height: 20px; }
+  .invoicey-android .permission-scope legend { font-size: 12px; }
+  .invoicey-android .settings-panel h2 { font-size: 16px; }
+  .invoicey-android .settings-section-heading p, .invoicey-android .settings-panel > p { font-size: 12px; line-height: 1.6; }
+  .invoicey-android .company-card-copy > span, .invoicey-android .company-card-copy small { font-size: 12px; }
+  .invoicey-android .company-title-line strong { font-size: 15px; }
+  .invoicey-android .backup-status strong { font-size: 13px; }
+  .invoicey-android .backup-status small, .invoicey-android .backup-location small { font-size: 12px; overflow-wrap: anywhere; }
+  .invoicey-android .backup-location strong { font-size: 13px; }
+  .invoicey-android .backup-history-row strong { font-size: 12px; white-space: normal; overflow-wrap: anywhere; }
+  .invoicey-android .backup-history-row small, .invoicey-android .backup-history-row > span { font-size: 11px; }
+  .invoicey-android .global-result { min-height: 60px; padding: 10px; grid-template-columns: 80px minmax(0,1fr); }
+  .invoicey-android .global-result-type { font-size: 10px; }
+  .invoicey-android .global-result-copy strong { font-size: 14px; }
+  .invoicey-android .global-result-copy small { font-size: 12px; }
+  .invoicey-android .android-about-backdrop { position: fixed; inset: 0; z-index: 85; display: grid; place-items: center; padding: 18px; background: rgba(10,24,20,.55); }
+  .invoicey-android .android-about-card { position: relative; width: min(400px,100%); max-height: calc(var(--android-viewport-height) - 36px); overflow: auto; padding: 24px; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: var(--shadow); }
+  .invoicey-android .android-about-card > .close-button { position: absolute; top: 8px; right: 8px; }
+  .invoicey-android .android-about-card img { display: block; width: 100px; height: 100px; object-fit: contain; border-radius: 50%; margin: 6px auto 17px; }
+  .invoicey-android .android-about-card h2 { text-align: center; margin: 0 0 6px; font-size: 23px; }
+  .invoicey-android .android-about-card > p { text-align: center; font-size: 13px; color: var(--muted); line-height: 1.6; }
+  .invoicey-android .android-about-card address { font-style: normal; display: grid; gap: 6px; margin-top: 22px; font-size: 14px; }
+  .invoicey-android .android-about-card address a { display: flex; align-items: center; min-height: 44px; color: var(--accent); overflow-wrap: anywhere; }
+  .invoicey-android .android-about-card address strong { padding: 5px 0; }
+  .invoicey-android .toast-stack { right: 12px; left: 12px; bottom: calc(max(16px, env(safe-area-inset-bottom)) + var(--android-system-bottom)); }
+  .invoicey-android .toast { min-width: 0; max-width: 100%; font-size: 13px; line-height: 1.5; }
+  .invoicey-android[data-theme="dark"] .table-card,
+  .invoicey-android[data-theme="dark"] .report-metric,
+  .invoicey-android[data-theme="dark"] .report-toolbar,
+  .invoicey-android[data-theme="dark"] .setting-nav,
+  .invoicey-android[data-theme="dark"] .global-search-results,
+  .invoicey-android[data-theme="dark"] .backup-status,
+  .invoicey-android[data-theme="dark"] .help-note {
+    background: var(--surface); border-color: var(--line); color: var(--ink);
+  }
+  .invoicey-android[data-theme="dark"] .data-table td,
+  .invoicey-android[data-theme="dark"] .table-primary,
+  .invoicey-android[data-theme="dark"] .line-row .line-total,
+  .invoicey-android[data-theme="dark"] .global-result-copy strong,
+  .invoicey-android[data-theme="dark"] .backup-status strong,
+  .invoicey-android[data-theme="dark"] .backup-location strong,
+  .invoicey-android[data-theme="dark"] .company-autofill-copy strong {
+    color: var(--ink);
+  }
+  .invoicey-android[data-theme="dark"] .form-field label,
+  .invoicey-android[data-theme="dark"] .auth-fields > label,
+  .invoicey-android[data-theme="dark"] .permission-scope label,
+  .invoicey-android[data-theme="dark"] .permission-scope legend,
+  .invoicey-android[data-theme="dark"] .company-autofill-copy small,
+  .invoicey-android[data-theme="dark"] .global-result-copy small,
+  .invoicey-android[data-theme="dark"] .metric-top,
+  .invoicey-android[data-theme="dark"] .help-note { color: var(--muted); }
+  .invoicey-android[data-theme="dark"] .global-result:hover,
+  .invoicey-android[data-theme="dark"] .global-result:focus-visible { background: var(--accent-soft); }
+  .invoicey-android[data-theme="dark"] .global-search-wrap .global-search:focus-within { background: #111916; border-color: #35433c; }
+}
+
+@media screen and (max-width: 850px) {
+  .invoicey-android .sidebar { width: min(300px, calc(100vw - 44px)); }
+  .invoicey-android .topbar { min-height: 64px; height: auto; padding: 8px 10px; backdrop-filter: none; }
+  .invoicey-android .breadcrumbs { font-size: 13px; gap: 6px; min-width: 0; }
+  .invoicey-android .breadcrumbs > span:first-child, .invoicey-android .crumb-slash,
+  .invoicey-android .top-avatar, .invoicey-android .topbar-divider { display: none; }
+  .invoicey-android .breadcrumbs strong { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .invoicey-android .topbar-actions { gap: 0; }
+  .invoicey-android .global-search { min-width: 44px; min-height: 44px; }
+  .invoicey-android .global-search-wrap .global-search:focus-within { top: 8px; right: 10px; width: calc(100vw - 74px); height: 46px; }
+  .invoicey-android .global-search input { font-size: 16px; }
+  .invoicey-android .global-search-results { top: 57px; width: calc(100vw - 20px); right: 0; max-height: calc(var(--android-viewport-height) - 85px); }
+  .invoicey-android .page-content { padding: 20px 12px calc(32px + var(--android-system-bottom)); }
+  .invoicey-android .page-heading p { font-size: 13px; line-height: 1.55; }
+  .invoicey-android .eyebrow { font-size: 11px; overflow-wrap: anywhere; }
+  .invoicey-android .heading-actions { gap: 7px; }
+  .invoicey-android .heading-actions .button { white-space: normal; text-align: center; }
+  .invoicey-android .metric-top { font-size: 11px; }
+  .invoicey-android .metric-value { font-size: clamp(16px, 4.8vw, 22px); white-space: normal; overflow-wrap: anywhere; }
+  .invoicey-android .metric-foot { font-size: 10px; flex-wrap: wrap; line-height: 1.4; }
+  .invoicey-android .summary-copy span { font-size: 11px; }
+  .invoicey-android .summary-copy strong { font-size: 13px; overflow-wrap: anywhere; }
+  .invoicey-android .summary-item { min-width: 0; }
+  .invoicey-android .summary-arrow { display: none; }
+  .invoicey-android .report-grid { grid-template-columns: 1fr 1fr; }
+  .invoicey-android .report-metric span { font-size: 12px; }
+  .invoicey-android .report-metric strong { overflow-wrap: anywhere; }
+  .invoicey-android .toolbar .mini-search { flex: 1 1 100%; }
+  .invoicey-android .toolbar .mini-search input { width: 100%; }
+  .invoicey-android .filter-select { max-width: 100%; flex: 1 1 auto; }
+  .invoicey-android .form-grid, .invoicey-android .modal .form-grid.two-column,
+  .invoicey-android .setting-form .form-grid { grid-template-columns: 1fr; }
+  .invoicey-android .doc-tax-fields { grid-template-columns: 1fr 1fr; }
+  .invoicey-android .modal-footer { gap: 7px; }
+  .invoicey-android .modal-actions { gap: 7px; width: 100%; }
+  .invoicey-android .modal-actions .button { flex: 1 1 auto; }
+  .invoicey-android .detail-actions { flex-wrap: wrap; }
+  .invoicey-android .detail-actions .button { flex: 1 1 auto; }
+  .invoicey-android .detail-stat span { font-size: 11px; }
+  .invoicey-android .detail-stat strong { font-size: 15px; overflow-wrap: anywhere; }
+  .invoicey-android .backup-actions { flex-direction: column; }
+  .invoicey-android .backup-actions .button { width: 100%; white-space: normal; }
+  .invoicey-android .backup-panel .settings-section-heading { flex-direction: column; align-items: flex-start; }
+  .invoicey-android .backup-badge { font-size: 11px; }
+  .invoicey-android .line-items-wrap { overflow: visible; border: 0; background: transparent; }
+  .invoicey-android .line-table { display: block; min-width: 0; width: 100%; }
+  .invoicey-android .line-table thead { display: none; }
+  .invoicey-android .line-table tbody { display: grid; gap: 14px; }
+  .invoicey-android .line-row { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px 10px; border: 1px solid var(--line); border-radius: 10px; padding: 13px; background: var(--surface); }
+  .invoicey-android .line-row td { display: block; min-width: 0; border: 0; padding: 0; }
+  .invoicey-android .line-row td::before { content: attr(data-field-label); display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; }
+  .invoicey-android .line-item-cell { grid-column: 1/-1; min-width: 0; }
+  .invoicey-android .line-kind-row { margin-bottom: 9px; }
+  .invoicey-android .line-kind-row select { max-width: none; }
+  .invoicey-android .line-detail { gap: 9px; }
+  .invoicey-android .line-table input, .invoicey-android .line-table select,
+  .invoicey-android .line-table .line-discount { height: 46px; width: 100%; padding: 10px; font-size: 16px; }
+  .invoicey-android .line-table .line-select { min-width: 0; }
+  .invoicey-android .line-detail .line-description, .invoicey-android .line-detail .line-service-title { height: 46px !important; font-size: 16px !important; }
+  .invoicey-android .line-detail .line-service-description { height: 84px !important; min-height: 84px; font-size: 16px !important; padding: 10px !important; }
+  .invoicey-android .line-row .line-total { font-size: 16px; align-self: start; padding-top: 1px; overflow-wrap: anywhere; }
+  .invoicey-android .line-row td:last-child { grid-column: 1/-1; justify-self: end; }
+  .invoicey-android .line-row td:last-child::before { display: none; }
+  .invoicey-android .remove-line { background: var(--red-soft); border-radius: 7px; font-size: 23px; color: var(--red); }
+  .invoicey-android .add-line-button { min-height: 48px; font-size: 14px; }
+  .invoicey-android .invoice-total-box { flex-wrap: wrap; gap: 7px 15px; }
+  .invoicey-android .total-breakdown { flex: 1 1 100%; align-items: flex-start; font-size: 12px; }
+  .invoicey-android .invoice-total-box > span { font-size: 13px; }
+  .invoicey-android .invoice-total-box > strong { font-size: 20px; }
+}
+
+@media screen and (prefers-reduced-motion: reduce) {
+  .invoicey-android *, .invoicey-android *::before, .invoicey-android *::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+
+/* Native Android PDF export temporarily adds this class before invoking the
+   PrintDocumentAdapter. It guarantees that only the A4 document is painted,
+   even on WebViews that do not fully apply the print stylesheet to overlays. */
+html.android-pdf-export, html.android-pdf-export body,
+html.android-pdf-export #modalRoot,
+html.android-pdf-export .modal-backdrop,
+html.android-pdf-export .modal,
+html.android-pdf-export .modal-body,
+html.android-pdf-export .print-wrap { background: #fff !important; color: #20292e !important; height: auto !important; min-height: 0 !important; max-height: none !important; }
+html.android-pdf-export .app-shell,
+html.android-pdf-export .sidebar,
+html.android-pdf-export .topbar,
+html.android-pdf-export .page-content,
+html.android-pdf-export .modal-head,
+html.android-pdf-export .modal-footer,
+html.android-pdf-export .toast-stack { display: none !important; }
+html.android-pdf-export #modalRoot { display: block !important; position: static !important; }
+html.android-pdf-export .modal-backdrop { position: static !important; inset: auto !important; display: block !important; padding: 0 !important; background: #fff !important; }
+html.android-pdf-export .modal { display: block !important; width: 100% !important; max-width: none !important; max-height: none !important; overflow: visible !important; box-shadow: none !important; border: 0 !important; border-radius: 0 !important; animation: none !important; }
+html.android-pdf-export .modal-body { display: block !important; overflow: visible !important; padding: 0 !important; }
+html.android-pdf-export .print-wrap { display: block !important; overflow: visible !important; }
+/* Capture a stable desktop-width document and scale it into the A4 content
+   rectangle in PdfExport. Using the phone viewport width here makes the
+   invoice table wrap differently on every device and was the source of the
+   clipped/blank continuation pages seen on Android. */
+html.android-pdf-export,
+html.android-pdf-export body,
+html.android-pdf-export #modalRoot,
+html.android-pdf-export .modal-backdrop,
+html.android-pdf-export .modal,
+html.android-pdf-export .modal-body,
+html.android-pdf-export .print-wrap { width: 735px !important; min-width: 735px !important; }
+html.android-pdf-export .pdf-document { display: flex !important; flex-direction: column !important; width: 735px !important; min-width: 735px !important; max-width: 735px !important; margin: 0 !important; }
+html.android-pdf-export .pdf-document .doc-body { flex: 1 0 auto !important; }
+html.android-pdf-export .pdf-document .doc-print-footer { margin-top: auto !important; }
+/* PdfExport clones exactly one document into this isolated host. Keeping the
+   interactive modal out of the paint tree prevents stale/duplicate modal
+   content from appearing on continuation pages. */
+html.android-pdf-export #modalRoot { display: none !important; }
+html.android-pdf-export #androidPdfExportHost { display: block !important; position: static !important; width: 735px !important; min-width: 735px !important; max-width: 735px !important; margin: 0 !important; padding: 0 !important; background: #fff !important; overflow: visible !important; }
+html.android-pdf-export #androidPdfExportHost .print-wrap { display: block !important; width: 735px !important; min-width: 735px !important; max-width: 735px !important; overflow: visible !important; }
+
+@media print {
+  .android-nav-scrim, .android-about-button, .android-table-hint, #androidAbout { display: none !important; }
+}
+
+/* The drawer lives below the native system insets supplied by MainActivity. Keep
+   it independently scrollable and large enough for reliable one-handed taps. */
+@media screen and (max-width: 850px) {
+  .invoicey-android .sidebar {
+    z-index: 30;
+    top: 0;
+    bottom: 0;
+    height: 100dvh;
+    max-height: 100dvh;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    padding-top: max(18px, env(safe-area-inset-top));
+    padding-bottom: calc(max(18px, env(safe-area-inset-bottom)) + var(--android-system-bottom));
+    box-shadow: 10px 0 28px rgba(0,0,0,.18);
+  }
+  .invoicey-android .sidebar.open { transform: translateX(0); }
+  .invoicey-android .nav-item,
+  .invoicey-android .settings-link,
+  .invoicey-android .android-about-button {
+    min-height: 48px;
+    padding-top: 12px;
+    padding-bottom: 12px;
+  }
+  .invoicey-android .android-nav-scrim {
+    z-index: 28;
+    touch-action: none;
+  }
+  .invoicey-android .menu-button,
+  .invoicey-android .menu-button:focus-visible {
+    min-width: 48px;
+    min-height: 48px;
+    margin-left: 0;
+    margin-right: 4px;
+  }
+  .invoicey-android .receiver-key-status {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: -5px 0 14px;
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .invoicey-android .receiver-key-status strong { color: var(--ink); font-size: 13px; }
+  .invoicey-android .receiver-key-missing { border-color: var(--line); }
+  .invoicey-android .receiver-key-ready { border-color: var(--line); }
+}
+
+/* Keep modal actions above gesture and three-button navigation bars. MainActivity
+   supplies the measured Android inset; env() covers devices that expose a CSS
+   safe-area value as well. */
+@media screen {
+  .invoicey-android .modal-backdrop {
+    padding-bottom: calc(var(--android-system-bottom) + env(safe-area-inset-bottom, 0px) + 8px) !important;
+  }
+  .invoicey-android .modal {
+    max-height: calc(var(--android-viewport-height) - var(--android-system-bottom) - env(safe-area-inset-bottom, 0px) - 22px) !important;
+  }
+  .invoicey-android .modal-footer {
+    padding-bottom: calc(max(18px, env(safe-area-inset-bottom, 0px)) + var(--android-system-bottom) + 6px) !important;
+  }
+  .invoicey-android .modal-actions .button {
+    margin-bottom: 2px;
+  }
+  .invoicey-android .service-catalog-toggle {
+    min-height: 34px;
+    align-items: center;
+    font-size: 12px;
+  }
+  .invoicey-android .service-catalog-toggle input {
+    width: 20px !important;
+    height: 20px !important;
+    min-height: 20px !important;
+  }
+}
+
