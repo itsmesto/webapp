@@ -23,7 +23,7 @@
   const request = async (endpoint, method = 'GET', body) => {
     const binary = body instanceof Uint8Array || body instanceof ArrayBuffer;
     const response = await fetch('/api/' + endpoint, {method,
-      headers: body === undefined ? {} : {'content-type': binary ? 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' : 'application/json'},
+      headers: body === undefined ? {} : {'content-type': binary ? (endpoint === 'backup/restore-upload' ? 'application/octet-stream' : 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') : 'application/json'},
       body: body === undefined ? undefined : binary ? body : JSON.stringify(body)});
     const text = await response.text();
     let data; try { data = JSON.parse(text); } catch (_) { data = {unparseable: text}; }
@@ -105,12 +105,13 @@
       const estimate = await api('quotations', 'POST', {companyId: 'company-default', customerId: customer.id, documentType: 'estimate', quoteDate: date, terms: profile.termsConditions, items: [{itemType: 'service', serviceTitle: 'Consultation', serviceDescription: 'Service detail', quantity: 1, unitPrice: 300, unitCost: 20}]});
       check('Estimate has separate numbering and company terms', () => {assert(estimate.number.startsWith('EST-'), 'Estimate prefix'); equal(estimate.terms, profile.termsConditions, 'Terms'); });
       stage = 'expenses';
-      const labour = await api('expenses', 'POST', {projectKey: quote.project_key, quotationId: quote.id, customerId: customer.id, description: 'Workshop labour', category: 'Labour', expenseType: 'labour', workerCount: 2, workerNames: 'Technician One, Technician Two', workingDays: 2, labourRate: 1000, additionalLabour: 500, expenseDate: date, attachments: [{name: 'qa-labour-receipt.png', type: 'image/png', data: png}]});
-      const materials = await api('expenses', 'POST', {projectKey: quote.project_key, quotationId: quote.id, supplierId: supplier.id, description: 'Consumable materials', category: 'Materials', amount: 3000, expenseDate: date});
-      await api('expenses', 'POST', {projectKey: quote.project_key, description: 'Transport cost', category: 'Transport', amount: 500, expenseDate: date});
+      const expenseInvoice = await api('invoices', 'POST', {companyId: 'company-default', customerId: customer.id, invoiceDate: date, paidAmount: 500, paymentMethod: 'Cash', items: [{itemType: 'service', serviceTitle: 'Expense reference service', quantity: 1, unitPrice: 500, unitCost: 0}]});
+      const labour = await api('expenses', 'POST', {invoiceIds: [expenseInvoice.id], customerId: customer.id, description: 'Workshop labour', category: 'Labour', expenseType: 'labour', workerCount: 2, workerNames: 'Technician One, Technician Two', workingDays: 2, labourRate: 1000, additionalLabour: 500, expenseDate: date, attachments: [{name: 'qa-labour-receipt.png', type: 'image/png', data: png}]});
+      const materials = await api('expenses', 'POST', {invoiceIds: [expenseInvoice.id], supplierId: supplier.id, description: 'Consumable materials', category: 'Materials', amount: 3000, expenseDate: date});
+      await api('expenses', 'POST', {invoiceIds: [expenseInvoice.id], description: 'Transport cost', category: 'Transport', amount: 500, expenseDate: date});
       data = await snapshot();
       const attachment = data.expense_attachments.find(row => row.expense_id === labour.id);
-      check('Labour cost and project/supplier/receipt links save', () => {near(labour.amount, 4500, 'Labour'); equal(labour.customer_id, customer.id, 'Customer'); equal(materials.supplier_id, supplier.id, 'Supplier'); assert(attachment, 'Receipt metadata'); equal(attachment.file_name, 'qa-labour-receipt.png', 'Receipt name'); });
+      check('Labour total, paid-invoice/customer/supplier and receipt links save', () => {near(labour.amount, 4500, 'Labour'); equal(labour.customer_id, customer.id, 'Customer'); equal(materials.supplier_id, supplier.id, 'Supplier'); assert(data.expense_invoices.some(row => row.expense_id === labour.id && row.invoice_id === expenseInvoice.id), 'Paid invoice link'); assert(attachment, 'Receipt metadata'); equal(attachment.file_name, 'qa-labour-receipt.png', 'Receipt name'); });
       const attachmentResponse = await fetch('/api/expense-attachments/' + attachment.id), attachmentBytes = new Uint8Array(await attachmentResponse.arrayBuffer());
       check('Saved receipt bytes can be read', () => {equal(attachmentResponse.status, 200, 'Receipt read'); equal(attachmentBytes[0], 137, 'PNG signature'); equal(attachmentBytes[1], 80, 'PNG signature'); });
       const invoice = await api('quotations/' + quote.id + '/convert', 'POST', {invoiceDate: date, paidAmount: 100, paymentMethod: 'Bank transfer'});
@@ -119,29 +120,29 @@
       await api('payments', 'POST', {invoiceId: invoice.id, amount: 800, paymentDate: date, method: 'Cash'});
       data = await snapshot();
       check('Payment updates overpaid status and balance inputs', () => {equal(data.invoices.find(row => row.id === invoice.id).status, 'overpaid', 'Invoice status'); near(data.payments.filter(row => row.invoice_id === invoice.id).reduce((sum, row) => sum + row.amount, 0), 900, 'Paid total'); });
-      await api('expenses/' + materials.id, 'PUT', {projectKey: quote.project_key, quotationId: quote.id, supplierId: supplier.id, description: 'Updated materials', category: 'Materials', amount: 3000, expenseDate: date});
+      await api('expenses/' + materials.id, 'PUT', {invoiceIds: [expenseInvoice.id], supplierId: supplier.id, description: 'Updated materials', category: 'Materials', amount: 3000, expenseDate: date});
       data = await snapshot();
-      check('Project expense totals and cost inputs remain linked after edits', () => {near(data.expenses.filter(row => row.project_key === quote.project_key).reduce((sum, row) => sum + row.amount, 0), 8000, 'Project costs'); equal(data.expenses.filter(row => row.project_key === quote.project_key && row.expense_type === 'labour').length, 1, 'Labour records'); });
+      check('Invoice links survive expense edits and each expense is counted once', () => {near(data.expenses.reduce((sum, row) => sum + row.amount, 0), 8000, 'Expense total'); equal(data.expense_invoices.filter(row => row.expense_id === materials.id && row.invoice_id === expenseInvoice.id).length, 1, 'Updated expense invoice link'); equal(data.expenses.filter(row => row.expense_type === 'labour').length, 1, 'Labour records'); });
       const partner = await api('partners', 'POST', {name: 'Partner One QA', sharePercent: 50}), profit = await api('profit-shares/generate', 'POST', {periodStart: `${year}-01-01`, periodEnd: `${year}-12-31`});
       check('Profit-sharing calculation creates a linked partner record', () => equal(profit.shares[0].partner_id, partner.id, 'Partner'));
       stage = 'backup';
-      const workbookResponse = await fetch('/api/backup.xlsx'), workbook = new Uint8Array(await workbookResponse.arrayBuffer());
-      check('Company XLSX backup contains a real ZIP workbook', () => {equal(workbookResponse.status, 200, 'Backup status'); equal(workbook[0], 80, 'ZIP signature'); equal(workbook[1], 75, 'ZIP signature'); assert(workbook.length > 1000, 'Backup size'); });
-      const ownRestore = await request('restore', 'POST', workbook);
-      check('Company can restore its own workbook', () => equal(ownRestore.status, 200, 'Restore'));
-      await api('backup/create', 'POST', {});
-      const backupStatus = await api('backup/status'), history = await api('backup/history');
-      check('Automatic/manual backup and recovery history remain available', () => {assert(backupStatus.available, 'Available'); assert(backupStatus.fileName.endsWith('_Backup.xlsx'), 'Per-company name'); assert(history.length > 0, 'History'); });
-      await rejected('Corrupt workbook is rejected with useful error', 'restore', 'POST', new Uint8Array([80, 75, 0, 0, 0]));
+      const backupResponse = await fetch('/api/backup/download'), backupBytes = new Uint8Array(await backupResponse.arrayBuffer());
+      check('Company backup downloads as a private SQLite snapshot', () => {equal(backupResponse.status, 200, 'Backup status'); equal(backupResponse.headers.get('content-type'), 'application/octet-stream', 'Backup type'); equal(new TextDecoder().decode(backupBytes.slice(0, 16)), 'SQLite format 3\u0000', 'SQLite signature'); assert(backupBytes.length > 1000, 'Backup size'); });
+      const createdBackup = await api('backup/create', 'POST', {}), backupStatus = await api('backup/status'), history = await api('backup/history');
+      check('Manual account backup and private recovery history are available', () => {assert(backupStatus.available, 'Available'); assert(backupStatus.fileName.endsWith('_Account_Backup.invoicey'), 'Private account backup name'); assert(createdBackup.fileName.endsWith('.invoicey-backup'), 'Recovery snapshot name'); assert(history.some(item => item.fileName === createdBackup.fileName), 'Backup history'); });
+      await api('customers', 'POST', {name: 'Restore marker only'});
+      const ownRestore = await request('backup/restore-history', 'POST', {fileName: createdBackup.fileName});
+      check('Company can restore its own private account backup', () => equal(ownRestore.status, 200, 'Restore'));
       data = await snapshot();
-      check('Failed restore preserves existing invoice and receipt', () => {assert(data.invoices.some(row => row.id === invoice.id), 'Invoice'); assert(data.expense_attachments.some(row => row.expense_id === labour.id), 'Receipt'); });
+      check('Backup restore retains invoice and receipt and removes later data', () => {assert(data.invoices.some(row => row.id === invoice.id), 'Invoice'); assert(data.expense_attachments.some(row => row.expense_id === labour.id), 'Receipt'); assert(!data.customers.some(row => row.name === 'Restore marker only'), 'Post-backup marker'); });
+      await rejected('Corrupt private account backup is rejected', 'backup/restore-upload', 'POST', new Uint8Array([80, 75, 0, 0, 0]));
       stage = 'separation';
       await logout(); await login('androidqasuper');
       const companyB = await api('admin/companies', 'POST', {company: {name: 'Android QA Beta'}, userLimit: 1, admin: {username: 'androidqabeta', displayName: 'Beta Admin', password, recoveryCode: recovery, recoveryCodeConfirm: recovery}});
       await api('auth/select-company', 'POST', {companyId: companyB.id});
       data = await snapshot();
       check('New company has a separate empty business environment', () => {equal(data.customers.length, 0, 'Customers'); equal(data.products.length, 0, 'Products'); equal(data.invoices.length, 0, 'Invoices'); });
-      const wrongRestore = await request('restore', 'POST', workbook);
+      const wrongRestore = await request('backup/restore-history', 'POST', {fileName: createdBackup.fileName});
       check('Company A workbook cannot overwrite company B', () => equal(wrongRestore.status, 400, 'Wrong-company restore'));
       await rejected('Company user limit prevents extra account', 'admin/users', 'POST', {companyId: companyB.id, username: 'androidqaextra', displayName: 'Extra', password, role: 'salesperson', recoveryCode: recovery, recoveryCodeConfirm: recovery}, 409);
       await api('customers', 'POST', {name: 'Only in Beta QA', phone: '07000112233'});
