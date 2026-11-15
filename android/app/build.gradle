@@ -1,0 +1,35 @@
+plugins { id 'com.android.application' }
+android {
+    namespace 'com.itsme.invoicey'
+    compileSdk 35
+    def invoiceyApplicationId = project.findProperty('invoiceyApplicationId') ?: 'com.itsme.invoicey.proapp'
+    defaultConfig { applicationId invoiceyApplicationId; minSdk 30; targetSdk 35; versionCode 31500; versionName '3.1.5' }
+    buildFeatures { buildConfig true }
+    compileOptions { sourceCompatibility JavaVersion.VERSION_11; targetCompatibility JavaVersion.VERSION_11 }
+    signingConfigs {
+        release {
+            // Production credentials are supplied through the build environment and
+            // never committed to the project or included in the source bundle.
+            def keyPath = System.getenv('INVOICEY_RELEASE_KEYSTORE')
+            def storePass = System.getenv('INVOICEY_RELEASE_STORE_PASSWORD')
+            def alias = System.getenv('INVOICEY_RELEASE_KEY_ALIAS')
+            def keyPass = System.getenv('INVOICEY_RELEASE_KEY_PASSWORD')
+            if (keyPath && storePass && alias && keyPass) {
+                storeFile file(keyPath); storePassword storePass; keyAlias alias; keyPassword keyPass
+                enableV1Signing true
+                enableV2Signing true
+                enableV3Signing true
+                enableV4Signing true
+            }
+        }
+    }
+    buildTypes {
+        debug { applicationIdSuffix '.qa'; signingConfig signingConfigs.release }
+        release {
+            minifyEnabled false
+            if (signingConfigs.release.storeFile == null) throw new GradleException('Production release signing is not configured. Set INVOICEY_RELEASE_KEYSTORE, INVOICEY_RELEASE_STORE_PASSWORD, INVOICEY_RELEASE_KEY_ALIAS and INVOICEY_RELEASE_KEY_PASSWORD.')
+            signingConfig signingConfigs.release
+        }
+    }
+}
+
