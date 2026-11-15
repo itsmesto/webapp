@@ -1,0 +1,10 @@
+itsme invoicey 3.0.1 installation
+
+1. On the phone, download only itsme-invoicey-v3.0.1-universal-release.apk.
+2. Open Android Settings > Security and privacy > More security settings > Install unknown apps, then allow the browser or Drive application used for the download.
+3. Open the APK and install it. The app package is com.itsme.invoicey.mobile, so it does not collide with the previous debug package com.itsme.invoicey.
+4. Launch itsme invoicey and complete the first-run company setup.
+5. If an older installation contains data, export its validated workspace backup before uninstalling it, then use the new app's restore/import flow.
+
+This APK is release-signed with the itsme invoicey production certificate and is universal (no split APK is required).
+
