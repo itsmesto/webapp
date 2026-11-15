@@ -1,0 +1,47 @@
+# Dependencies and package-manager state
+node_modules/
+.pnpm-store/
+.npm/
+
+# Local data, customer/company records, and runtime database journals
+data/
+database/*.sqlite*
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*
+*.log
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+*.jks
+signing/
+local.properties
+
+# Generated output, caches, temporary and QA data
+tmp/
+$out/
+out/
+dist/
+coverage/
+.gradle/
+android/.gradle/
+android/build/
+android/app/build/
+*.apk
+*.aab
+
+# OS/editor noise
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/
+
